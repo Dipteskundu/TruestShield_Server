@@ -1,9 +1,16 @@
 const ScanResult = require("../models/ScanResult");
+const User = require("../models/User");
 const { analyzeText } = require("../services/aiService");
 const { scanUrl } = require("../services/urlSafetyService");
 const { analyzeImage } = require("../services/visionService");
 const { hashInput, getCache, setCache } = require("../services/cacheService");
 const ApiError = require("../utils/apiError");
+
+async function incrementDailyScan(userId, type) {
+  if (!userId) return;
+  const field = type === "url" || type === "image" ? `dailyScans.${type}` : "dailyScans.text";
+  await User.findByIdAndUpdate(userId, { $inc: { [field]: 1 } });
+}
 
 exports.scanText = async (req, res) => {
   const { type, content } = req.validated.body;
@@ -21,6 +28,8 @@ exports.scanText = async (req, res) => {
     input: content.slice(0, 5000),
     ...result,
   });
+
+  await incrementDailyScan(req.user?.id, type);
 
   const payload = {
     id: saved._id,
@@ -56,6 +65,8 @@ exports.scanUrl = async (req, res) => {
     metadata: result.metadata,
   });
 
+  await incrementDailyScan(req.user?.id, "url");
+
   const payload = {
     id: saved._id,
     type: "url",
@@ -86,6 +97,8 @@ exports.scanImage = async (req, res) => {
     reasons: result.reasons,
     metadata: result.metadata,
   });
+
+  await incrementDailyScan(req.user?.id, "image");
 
   res.status(201).json({
     success: true,

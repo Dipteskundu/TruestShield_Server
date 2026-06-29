@@ -7,7 +7,11 @@ const router = express.Router();
 
 router.use(authMiddleware);
 
+router.get("/profile", asyncHandler(userController.getProfile));
+router.put("/profile", asyncHandler(userController.updateProfile));
+router.put("/password", asyncHandler(userController.changePassword));
 router.get("/history", asyncHandler(userController.getHistory));
 router.get("/stats", asyncHandler(userController.getStats));
+router.get("/scans/remaining", asyncHandler(userController.getRemainingScans));
 
 module.exports = router;
