@@ -1,7 +1,7 @@
 const express = require("express");
 const scanController = require("../controllers/scan.controller");
 const asyncHandler = require("../utils/asyncHandler");
-const { authMiddleware, optionalAuth } = require("../middleware/auth.middleware");
+const { authMiddleware } = require("../middleware/auth.middleware");
 const { rateLimitMiddleware } = require("../middleware/rateLimit.middleware");
 const validate = require("../middleware/validate.middleware");
 const { scanTextSchema, scanUrlSchema } = require("../validators/scan.validator");
@@ -11,7 +11,7 @@ const router = express.Router();
 
 router.post(
   "/text",
-  optionalAuth,
+  authMiddleware,
   rateLimitMiddleware("text"),
   validate(scanTextSchema),
   asyncHandler(scanController.scanText)
@@ -19,7 +19,7 @@ router.post(
 
 router.post(
   "/url",
-  optionalAuth,
+  authMiddleware,
   rateLimitMiddleware("url"),
   validate(scanUrlSchema),
   asyncHandler(scanController.scanUrl)
@@ -27,7 +27,7 @@ router.post(
 
 router.post(
   "/image",
-  optionalAuth,
+  authMiddleware,
   rateLimitMiddleware("image"),
   uploadImage,
   asyncHandler(scanController.scanImage)

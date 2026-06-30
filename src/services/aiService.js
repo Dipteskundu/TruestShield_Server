@@ -1,4 +1,4 @@
-const axios = require("axios");
+const { callWithUserPreference, decrypt } = require("./aiProviderService");
 const crypto = require("crypto");
 
 const FRAUD_SIGNALS = {
@@ -137,46 +137,22 @@ function parseClaudeResponse(text, fallbackType) {
   }
 }
 
-async function callClaudeAPI(messages, retries = 1) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return null;
-
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const response = await axios.post(
-        "https://api.anthropic.com/v1/messages",
-        {
-          model: "claude-3-5-haiku-20241022",
-          max_tokens: 1024,
-          messages,
-        },
-        {
-          headers: {
-            "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-          },
-        }
-      );
-      return response.data.content?.[0]?.text || null;
-    } catch {
-      if (attempt === retries) return null;
-    }
-  }
-  return null;
-}
-
-async function analyzeText(type, content) {
+async function analyzeText(type, content, userPreferences = null) {
   const systemContent = buildSystemPrompt(type);
   const truncatedContent = content.slice(0, 5000);
 
-  const claudeResult = await callClaudeAPI([
+  const messages = [
     { role: "user", content: `${systemContent}\n\nContent to analyze:\n${truncatedContent}` },
-  ]);
+  ];
 
-  if (claudeResult) {
-    const parsed = parseClaudeResponse(claudeResult, type);
-    if (parsed) return parsed;
+  try {
+    const result = await callWithUserPreference(messages, userPreferences);
+    if (result) {
+      const parsed = parseClaudeResponse(result, type);
+      if (parsed) return parsed;
+    }
+  } catch {
+    // Fall through to mock response
   }
 
   return generateMockResponse(type);

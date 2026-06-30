@@ -4,6 +4,7 @@ const { analyzeText } = require("../services/aiService");
 const { scanUrl } = require("../services/urlSafetyService");
 const { analyzeImage } = require("../services/visionService");
 const { hashInput, getCache, setCache } = require("../services/cacheService");
+const { decrypt } = require("../services/encryptionService");
 const ApiError = require("../utils/apiError");
 
 async function incrementDailyScan(userId, type) {
@@ -21,7 +22,34 @@ exports.scanText = async (req, res) => {
     return res.json({ success: true, data: cached, cached: true });
   }
 
-  const result = await analyzeText(type, content);
+  let userPreferences = null;
+  if (req.user?.id) {
+    const user = await User.findById(req.user.id).select("aiPreferences");
+    if (user?.aiPreferences) {
+      userPreferences = {
+        provider: user.aiPreferences.provider,
+        model: user.aiPreferences.model,
+        customProvider: null,
+        apiKey: null,
+      };
+
+      if (user.aiPreferences.provider === "custom" && user.aiPreferences.customProviders?.length > 0) {
+        const activeProvider = user.aiPreferences.customProviders.find((p) => p.isActive);
+        if (activeProvider) {
+          userPreferences.customProvider = {
+            endpoint: activeProvider.endpoint,
+            apiKey: activeProvider.apiKey,
+            model: activeProvider.model,
+          };
+        }
+      } else if (user.aiPreferences.provider !== "system") {
+        const providerKey = `${user.aiPreferences.provider.toUpperCase()}_API_KEY`;
+        userPreferences.apiKey = process.env[providerKey] || null;
+      }
+    }
+  }
+
+  const result = await analyzeText(type, content, userPreferences);
   const saved = await ScanResult.create({
     userId: req.user?.id || null,
     type,

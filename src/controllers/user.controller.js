@@ -2,6 +2,10 @@ const ScanResult = require("../models/ScanResult");
 const Document = require("../models/Document");
 const User = require("../models/User");
 const ApiError = require("../utils/apiError");
+const { encrypt, maskKey } = require("../services/encryptionService");
+const { testProviderConnection, getAvailableProviders } = require("../services/aiProviderService");
+const { uploadBuffer } = require("../services/cloudinaryService");
+const { cloudinary } = require("../config/cloudinary");
 
 exports.getProfile = async (req, res) => {
   const user = await User.findById(req.user.id);
@@ -56,6 +60,59 @@ exports.changePassword = async (req, res) => {
   await user.save();
 
   res.json({ success: true, message: "Password updated successfully" });
+};
+
+exports.uploadAvatar = async (req, res) => {
+  if (!req.file) {
+    throw new ApiError(400, "Please upload an image file");
+  }
+
+  const user = await User.findById(req.user.id);
+  if (!user) throw new ApiError(404, "User not found");
+
+  if (user.avatar?.publicId) {
+    try {
+      await cloudinary.uploader.destroy(user.avatar.publicId);
+    } catch {
+      // Ignore deletion errors
+    }
+  }
+
+  const result = await uploadBuffer(req.file.buffer, "trustshield/avatars", "image");
+
+  if (!result.secure_url) {
+    throw new ApiError(500, "Failed to upload avatar");
+  }
+
+  user.avatar = {
+    url: result.secure_url,
+    publicId: result.public_id,
+  };
+
+  await user.save();
+
+  res.json({
+    success: true,
+    data: { avatar: user.avatar.url },
+  });
+};
+
+exports.removeAvatar = async (req, res) => {
+  const user = await User.findById(req.user.id);
+  if (!user) throw new ApiError(404, "User not found");
+
+  if (user.avatar?.publicId) {
+    try {
+      await cloudinary.uploader.destroy(user.avatar.publicId);
+    } catch {
+      // Ignore deletion errors
+    }
+  }
+
+  user.avatar = { url: null, publicId: null };
+  await user.save();
+
+  res.json({ success: true, message: "Avatar removed" });
 };
 
 exports.getHistory = async (req, res) => {
@@ -146,6 +203,140 @@ exports.getRemainingScans = async (req, res) => {
       text: Math.max(0, limits.text - dailyScans.text),
       url: Math.max(0, limits.url - dailyScans.url),
       image: Math.max(0, limits.image - dailyScans.image),
+    },
+  });
+};
+
+exports.getAISettings = async (req, res) => {
+  const user = await User.findById(req.user.id);
+  if (!user) throw new ApiError(404, "User not found");
+
+  const providers = getAvailableProviders();
+  const customProviders = (user.aiPreferences?.customProviders || []).map((p) => ({
+    id: p._id,
+    name: p.name,
+    endpoint: p.endpoint,
+    apiKey: maskKey(p.apiKey),
+    model: p.model,
+    isActive: p.isActive,
+    createdAt: p.createdAt,
+  }));
+
+  res.json({
+    success: true,
+    data: {
+      provider: user.aiPreferences?.provider || "system",
+      model: user.aiPreferences?.model || null,
+      customProviders,
+      availableProviders: providers,
+    },
+  });
+};
+
+exports.updateAISettings = async (req, res) => {
+  const { provider, model } = req.body;
+
+  const user = await User.findByIdAndUpdate(
+    req.user.id,
+    {
+      "aiPreferences.provider": provider,
+      "aiPreferences.model": model || null,
+    },
+    { new: true, runValidators: true }
+  );
+
+  if (!user) throw new ApiError(404, "User not found");
+
+  res.json({
+    success: true,
+    data: {
+      provider: user.aiPreferences.provider,
+      model: user.aiPreferences.model,
+    },
+  });
+};
+
+exports.addCustomProvider = async (req, res) => {
+  const { name, endpoint, apiKey, model } = req.body;
+
+  const user = await User.findById(req.user.id);
+  if (!user) throw new ApiError(404, "User not found");
+
+  if (!user.aiPreferences) {
+    user.aiPreferences = { provider: "system", model: null, customProviders: [] };
+  }
+
+  if (!user.aiPreferences.customProviders) {
+    user.aiPreferences.customProviders = [];
+  }
+
+  const MAX_CUSTOM_PROVIDERS = user.plan === "pro" ? 10 : 3;
+  if (user.aiPreferences.customProviders.length >= MAX_CUSTOM_PROVIDERS) {
+    throw new ApiError(400, `Maximum ${MAX_CUSTOM_PROVIDERS} custom providers allowed. Upgrade to Pro for more.`);
+  }
+
+  const encryptedApiKey = encrypt(apiKey);
+
+  user.aiPreferences.customProviders.push({
+    name,
+    endpoint,
+    apiKey: encryptedApiKey,
+    model,
+    isActive: true,
+  });
+
+  await user.save();
+
+  const newProvider = user.aiPreferences.customProviders[user.aiPreferences.customProviders.length - 1];
+
+  res.status(201).json({
+    success: true,
+    data: {
+      id: newProvider._id,
+      name: newProvider.name,
+      endpoint: newProvider.endpoint,
+      apiKey: maskKey(apiKey),
+      model: newProvider.model,
+      isActive: newProvider.isActive,
+      createdAt: newProvider.createdAt,
+    },
+  });
+};
+
+exports.removeCustomProvider = async (req, res) => {
+  const { id } = req.params;
+
+  const user = await User.findById(req.user.id);
+  if (!user) throw new ApiError(404, "User not found");
+
+  const providerIndex = user.aiPreferences?.customProviders?.findIndex(
+    (p) => p._id.toString() === id
+  );
+
+  if (providerIndex === undefined || providerIndex === -1) {
+    throw new ApiError(404, "Custom provider not found");
+  }
+
+  user.aiPreferences.customProviders.splice(providerIndex, 1);
+  await user.save();
+
+  res.json({ success: true, message: "Custom provider removed" });
+};
+
+exports.testProvider = async (req, res) => {
+  const { provider, endpoint, apiKey, model } = req.body;
+
+  const result = await testProviderConnection(provider, endpoint, apiKey, model);
+
+  if (!result.success) {
+    throw new ApiError(400, result.message);
+  }
+
+  res.json({
+    success: true,
+    data: {
+      message: result.message,
+      responsePreview: result.responsePreview,
     },
   });
 };

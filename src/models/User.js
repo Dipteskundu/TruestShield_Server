@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
+const { maskKey } = require("../services/encryptionService");
 
 const userSchema = new mongoose.Schema(
   {
@@ -28,6 +29,28 @@ const userSchema = new mongoose.Schema(
       image: { type: Number, default: 0 },
     },
     lastScanReset: { type: Date, default: Date.now },
+    avatar: {
+      url: { type: String, default: null },
+      publicId: { type: String, default: null },
+    },
+    aiPreferences: {
+      provider: {
+        type: String,
+        enum: ["system", "anthropic", "openai", "gemini", "custom"],
+        default: "system",
+      },
+      model: { type: String, default: null },
+      customProviders: [
+        {
+          name: { type: String, required: true, trim: true },
+          endpoint: { type: String, required: true, trim: true },
+          apiKey: { type: String, required: true },
+          model: { type: String, required: true, trim: true },
+          isActive: { type: Boolean, default: true },
+          createdAt: { type: Date, default: Date.now },
+        },
+      ],
+    },
   },
   { timestamps: true }
 );
@@ -43,13 +66,29 @@ userSchema.methods.comparePassword = async function comparePassword(candidate) {
 };
 
 userSchema.methods.toPublicJSON = function toPublicJSON() {
+  const customProviders = (this.aiPreferences?.customProviders || []).map((p) => ({
+    id: p._id,
+    name: p.name,
+    endpoint: p.endpoint,
+    apiKey: maskKey(p.apiKey),
+    model: p.model,
+    isActive: p.isActive,
+    createdAt: p.createdAt,
+  }));
+
   return {
     id: this._id,
     name: this.name,
     email: this.email,
     role: this.role,
     plan: this.plan,
+    avatar: this.avatar?.url || null,
     dailyScans: this.dailyScans,
+    aiPreferences: {
+      provider: this.aiPreferences?.provider || "system",
+      model: this.aiPreferences?.model || null,
+      customProviders,
+    },
     createdAt: this.createdAt,
   };
 };
