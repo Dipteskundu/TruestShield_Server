@@ -18,6 +18,7 @@ router.delete("/avatar", asyncHandler(userController.removeAvatar));
 router.get("/history", asyncHandler(userController.getHistory));
 router.get("/stats", asyncHandler(userController.getStats));
 router.get("/scans/remaining", asyncHandler(userController.getRemainingScans));
+router.get("/usage", asyncHandler(userController.getUsage));
 
 router.get("/ai-settings", asyncHandler(userController.getAISettings));
 router.put("/ai-settings", validate(aiPreferencesSchema), asyncHandler(userController.updateAISettings));

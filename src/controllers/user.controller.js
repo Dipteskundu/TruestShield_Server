@@ -323,6 +323,131 @@ exports.removeCustomProvider = async (req, res) => {
   res.json({ success: true, message: "Custom provider removed" });
 };
 
+const PLAN_LIMITS = {
+  free: { text: 50, url: 30, image: 20, documents: 5 },
+  pro: { text: 100, url: 60, image: 40, documents: Infinity },
+};
+
+exports.getUsage = async (req, res) => {
+  const user = await User.findById(req.user.id).select("plan dailyScans lastScanReset");
+  if (!user) throw new ApiError(404, "User not found");
+
+  const plan = user.plan || "free";
+  const limits = PLAN_LIMITS[plan] || PLAN_LIMITS.free;
+
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  const lastReset = user.lastScanReset || now;
+  const isNewDay = lastReset.toISOString().slice(0, 10) !== now.toISOString().slice(0, 10);
+  const dailyScans = isNewDay
+    ? { text: 0, url: 0, image: 0 }
+    : user.dailyScans || { text: 0, url: 0, image: 0 };
+
+  const [weeklyScans, monthlyScans, allTimeScans, recentScans, recentDocs, monthlyDocCount, allTimeDocCount] =
+    await Promise.all([
+      ScanResult.aggregate([
+        { $match: { userId: user._id, createdAt: { $gte: weekAgo } } },
+        { $group: { _id: "$type", count: { $sum: 1 } } },
+      ]),
+      ScanResult.aggregate([
+        { $match: { userId: user._id, createdAt: { $gte: monthAgo } } },
+        { $group: { _id: "$type", count: { $sum: 1 } } },
+      ]),
+      ScanResult.aggregate([
+        { $match: { userId: user._id } },
+        { $group: { _id: "$type", count: { $sum: 1 } } },
+      ]),
+      ScanResult.find({ userId: user._id })
+        .sort({ createdAt: -1 })
+        .limit(20)
+        .select("type verdict confidence createdAt"),
+      Document.find({ userId: user._id })
+        .sort({ createdAt: -1 })
+        .limit(10)
+        .select("fileName documentType status overallRiskScore createdAt"),
+      Document.countDocuments({
+        userId: user._id,
+        createdAt: { $gte: monthAgo },
+      }),
+      Document.countDocuments({ userId: user._id }),
+    ]);
+
+  const aggregateByType = (results) => {
+    const map = { text: 0, url: 0, image: 0 };
+    results.forEach((r) => {
+      const key = r._id === "email" || r._id === "job" || r._id === "message" ? "text" : r._id;
+      if (key in map) map[key] += r.count;
+    });
+    return map;
+  };
+
+  const weekly = aggregateByType(weeklyScans);
+  const monthly = aggregateByType(monthlyScans);
+  const allTime = aggregateByType(allTimeScans);
+
+  const weeklyTotal = weekly.text + weekly.url + weekly.image;
+  const monthlyScanTotal = monthly.text + monthly.url + monthly.image;
+  const allTimeTotal = allTime.text + allTime.url + allTime.image;
+
+  const recentActivity = [
+    ...recentScans.map((s) => ({
+      id: s._id,
+      category: "scan",
+      type: s.type,
+      detail: s.type.charAt(0).toUpperCase() + s.type.slice(1) + " scan",
+      verdict: s.verdict,
+      confidence: s.confidence,
+      date: s.createdAt,
+    })),
+    ...recentDocs.map((d) => ({
+      id: d._id,
+      category: "document",
+      type: d.documentType,
+      detail: d.fileName,
+      verdict: d.overallRiskScore != null
+        ? d.overallRiskScore > 60 ? "dangerous" : d.overallRiskScore > 30 ? "suspicious" : "safe"
+        : null,
+      status: d.status,
+      date: d.createdAt,
+    })),
+  ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  const docsUsedThisMonth = monthlyDocCount;
+  const docsLimit = limits.documents === Infinity ? null : limits.documents;
+  const docsRemaining = docsLimit !== null ? Math.max(0, docsLimit - docsUsedThisMonth) : null;
+
+  res.json({
+    success: true,
+    data: {
+      plan,
+      limits: {
+        text: limits.text,
+        url: limits.url,
+        image: limits.image,
+        documents: docsLimit,
+      },
+      daily: {
+        text: { used: dailyScans.text, limit: limits.text, remaining: Math.max(0, limits.text - dailyScans.text) },
+        url: { used: dailyScans.url, limit: limits.url, remaining: Math.max(0, limits.url - dailyScans.url) },
+        image: { used: dailyScans.image, limit: limits.image, remaining: Math.max(0, limits.image - dailyScans.image) },
+        documents: {
+          used: docsUsedThisMonth,
+          limit: docsLimit,
+          remaining: docsRemaining,
+          note: docsLimit !== null ? "Monthly limit" : "Unlimited",
+        },
+      },
+      weekly: { ...weekly, total: weeklyTotal },
+      monthly: { ...monthly, total: monthlyScanTotal, documents: docsUsedThisMonth },
+      allTime: { ...allTime, total: allTimeTotal, documents: allTimeDocCount },
+      recentActivity,
+    },
+  });
+};
+
 exports.testProvider = async (req, res) => {
   const { provider, endpoint, apiKey, model } = req.body;
 
