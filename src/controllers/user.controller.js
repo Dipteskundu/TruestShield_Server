@@ -448,6 +448,126 @@ exports.getUsage = async (req, res) => {
   });
 };
 
+exports.getActivity = async (req, res) => {
+  const {
+    type,
+    verdict,
+    dateFrom,
+    dateTo,
+    search,
+    page = "1",
+    limit = "20",
+  } = req.query;
+
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const pageSize = Math.min(50, Math.max(1, parseInt(limit, 10) || 20));
+  const skip = (pageNum - 1) * pageSize;
+
+  const scanMatch = { userId: req.user.id };
+  const docMatch = { userId: req.user.id };
+
+  if (type) {
+    if (type === "text") {
+      scanMatch.type = { $in: ["email", "job", "message"] };
+    } else if (["email", "job", "message", "url", "image"].includes(type)) {
+      scanMatch.type = type;
+    }
+  }
+
+  if (verdict) {
+    scanMatch.verdict = verdict;
+  }
+
+  if (dateFrom || dateTo) {
+    const dateFilter = {};
+    if (dateFrom) dateFilter.$gte = new Date(dateFrom);
+    if (dateTo) {
+      const end = new Date(dateTo);
+      end.setHours(23, 59, 59, 999);
+      dateFilter.$lte = end;
+    }
+    scanMatch.createdAt = dateFilter;
+    docMatch.createdAt = dateFilter;
+  }
+
+  if (search) {
+    const regex = { $regex: search, $options: "i" };
+    scanMatch.input = regex;
+    docMatch.fileName = regex;
+  }
+
+  const [scanResults, scanTotal] = await Promise.all([
+    ScanResult.find(scanMatch)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(pageSize + 1)
+      .select("type input verdict confidence reasons metadata createdAt"),
+    ScanResult.countDocuments(scanMatch),
+  ]);
+
+  const [docResults, docTotal] = await Promise.all([
+    Document.find(docMatch)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(pageSize + 1)
+      .select("fileName documentType status overallRiskScore createdAt"),
+    Document.countDocuments(docMatch),
+  ]);
+
+  const allItems = [
+    ...scanResults.map((s) => ({
+      id: s._id,
+      category: "scan",
+      type: s.type,
+      label: s.type.charAt(0).toUpperCase() + s.type.slice(1) + " Scan",
+      input: s.input ? s.input.slice(0, 200) : "",
+      inputFull: s.input || "",
+      verdict: s.verdict,
+      confidence: s.confidence,
+      reasons: s.reasons || [],
+      metadata: s.metadata || {},
+      date: s.createdAt,
+    })),
+    ...docResults.map((d) => ({
+      id: d._id,
+      category: "document",
+      type: d.documentType,
+      label: d.fileName,
+      input: "",
+      inputFull: "",
+      verdict: d.overallRiskScore != null
+        ? d.overallRiskScore > 60 ? "dangerous" : d.overallRiskScore > 30 ? "suspicious" : "safe"
+        : null,
+      confidence: d.overallRiskScore || 0,
+      reasons: [],
+      metadata: { documentType: d.documentType, status: d.status },
+      date: d.createdAt,
+    })),
+  ];
+
+  allItems.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  const hasMore = allItems.length > pageSize;
+  const items = hasMore ? allItems.slice(0, pageSize) : allItems;
+  const totalCount = scanTotal + docTotal;
+  const totalPages = Math.ceil(totalCount / pageSize);
+
+  res.json({
+    success: true,
+    data: {
+      items,
+      pagination: {
+        page: pageNum,
+        limit: pageSize,
+        totalCount,
+        totalPages,
+        hasNext: pageNum < totalPages,
+        hasPrev: pageNum > 1,
+      },
+    },
+  });
+};
+
 exports.testProvider = async (req, res) => {
   const { provider, endpoint, apiKey, model } = req.body;
 
