@@ -7,13 +7,7 @@ const { hashInput, getCache, setCache } = require("../services/cacheService");
 const { decrypt } = require("../services/encryptionService");
 const ApiError = require("../utils/apiError");
 
-async function incrementDailyScan(userId, type) {
-  if (!userId) return;
-  const field = type === "url" || type === "image" ? `dailyScans.${type}` : "dailyScans.text";
-  await User.findByIdAndUpdate(userId, { $inc: { [field]: 1 } });
-}
-
-exports.scanText = async (req, res) => {
+async function scanText(req, res) {
   const { type, content } = req.validated.body;
   const cacheKey = `scan:text:${hashInput(`${type}:${content}`)}`;
 
@@ -57,8 +51,6 @@ exports.scanText = async (req, res) => {
     ...result,
   });
 
-  await incrementDailyScan(req.user?.id, type);
-
   const payload = {
     id: saved._id,
     type: saved.type,
@@ -71,9 +63,9 @@ exports.scanText = async (req, res) => {
 
   await setCache(cacheKey, payload);
   res.status(201).json({ success: true, data: payload });
-};
+}
 
-exports.scanUrl = async (req, res) => {
+async function scanUrlHandler(req, res) {
   const { url } = req.validated.body;
   const cacheKey = `scan:url:${hashInput(url)}`;
 
@@ -93,8 +85,6 @@ exports.scanUrl = async (req, res) => {
     metadata: result.metadata,
   });
 
-  await incrementDailyScan(req.user?.id, "url");
-
   const payload = {
     id: saved._id,
     type: "url",
@@ -108,9 +98,9 @@ exports.scanUrl = async (req, res) => {
 
   await setCache(cacheKey, payload);
   res.status(201).json({ success: true, data: payload });
-};
+}
 
-exports.scanImage = async (req, res) => {
+async function scanImage(req, res) {
   if (!req.file) {
     throw new ApiError(400, "Image file is required");
   }
@@ -126,8 +116,6 @@ exports.scanImage = async (req, res) => {
     metadata: result.metadata,
   });
 
-  await incrementDailyScan(req.user?.id, "image");
-
   res.status(201).json({
     success: true,
     data: {
@@ -140,9 +128,60 @@ exports.scanImage = async (req, res) => {
       createdAt: saved.createdAt,
     },
   });
-};
+}
 
-exports.getSharedResult = async (req, res) => {
+async function getCreditStatus(req, res) {
+  const { module } = req.params;
+  const userId = req.user?.id;
+
+  if (!userId) {
+    return res.json({
+      success: true,
+      data: { isGuest: true, limit: 2, module },
+    });
+  }
+
+  const user = await User.findById(userId).select("plan weeklyCredits weekStart");
+  if (!user) {
+    return res.json({
+      success: true,
+      data: { isGuest: true, limit: 2, module },
+    });
+  }
+
+  if (user.plan === "pro") {
+    return res.json({
+      success: true,
+      data: { isPro: true, limit: null, module },
+    });
+  }
+
+  const now = new Date();
+  const day = now.getUTCDay();
+  const diff = day === 0 ? 6 : day - 1;
+  const currentMonday = new Date(now);
+  currentMonday.setUTCDate(now.getUTCDate() - diff);
+  currentMonday.setUTCHours(0, 0, 0, 0);
+
+  let weeklyCredits = user.weeklyCredits || 0;
+  if (!user.weekStart || user.weekStart < currentMonday) {
+    weeklyCredits = 0;
+  }
+
+  res.json({
+    success: true,
+    data: {
+      isGuest: false,
+      plan: user.plan,
+      used: weeklyCredits,
+      limit: 20,
+      remaining: Math.max(0, 20 - weeklyCredits),
+      module,
+    },
+  });
+}
+
+async function getSharedResult(req, res) {
   const scan = await ScanResult.findOne({
     $or: [{ _id: req.params.id }, { shareToken: req.params.id }],
     expiresAt: { $gt: new Date() },
@@ -161,4 +200,12 @@ exports.getSharedResult = async (req, res) => {
       createdAt: scan.createdAt,
     },
   });
+}
+
+module.exports = {
+  scanText,
+  scanUrl: scanUrlHandler,
+  scanImage,
+  getCreditStatus,
+  getSharedResult,
 };

@@ -29,6 +29,8 @@ const userSchema = new mongoose.Schema(
       image: { type: Number, default: 0 },
     },
     lastScanReset: { type: Date, default: Date.now },
+    weeklyCredits: { type: Number, default: 0 },
+    weekStart: { type: Date, default: null },
     avatar: {
       url: { type: String, default: null },
       publicId: { type: String, default: null },
@@ -84,6 +86,7 @@ userSchema.methods.toPublicJSON = function toPublicJSON() {
     plan: this.plan,
     avatar: this.avatar?.url || null,
     dailyScans: this.dailyScans,
+    weeklyCredits: this.weeklyCredits,
     aiPreferences: {
       provider: this.aiPreferences?.provider || "system",
       model: this.aiPreferences?.model || null,

@@ -179,30 +179,38 @@ exports.getStats = async (req, res) => {
 };
 
 exports.getRemainingScans = async (req, res) => {
-  const user = await User.findById(req.user.id).select("dailyScans lastScanReset plan");
+  const user = await User.findById(req.user.id).select("plan weeklyCredits weekStart");
   if (!user) {
-    return res.json({ success: true, data: { text: 50, url: 30, image: 20 } });
+    return res.json({ success: true, data: { text: 20, url: 20, image: 20 } });
+  }
+
+  if (user.plan === "pro") {
+    return res.json({
+      success: true,
+      data: { text: null, url: null, image: null },
+    });
   }
 
   const now = new Date();
-  const lastReset = user.lastScanReset || now;
-  const isNewDay =
-    lastReset.toISOString().slice(0, 10) !== now.toISOString().slice(0, 10);
+  const day = now.getUTCDay();
+  const diff = day === 0 ? 6 : day - 1;
+  const currentMonday = new Date(now);
+  currentMonday.setUTCDate(now.getUTCDate() - diff);
+  currentMonday.setUTCHours(0, 0, 0, 0);
 
-  const dailyScans = isNewDay
-    ? { text: 0, url: 0, image: 0 }
-    : user.dailyScans || { text: 0, url: 0, image: 0 };
+  let weeklyCredits = user.weeklyCredits || 0;
+  if (!user.weekStart || user.weekStart < currentMonday) {
+    weeklyCredits = 0;
+  }
 
-  const limits = user.plan === "pro"
-    ? { text: 100, url: 60, image: 40 }
-    : { text: 50, url: 30, image: 20 };
+  const remaining = Math.max(0, 20 - weeklyCredits);
 
   res.json({
     success: true,
     data: {
-      text: Math.max(0, limits.text - dailyScans.text),
-      url: Math.max(0, limits.url - dailyScans.url),
-      image: Math.max(0, limits.image - dailyScans.image),
+      text: remaining,
+      url: remaining,
+      image: remaining,
     },
   });
 };
@@ -323,28 +331,27 @@ exports.removeCustomProvider = async (req, res) => {
   res.json({ success: true, message: "Custom provider removed" });
 };
 
-const PLAN_LIMITS = {
-  free: { text: 50, url: 30, image: 20, documents: 5 },
-  pro: { text: 100, url: 60, image: 40, documents: Infinity },
-};
-
 exports.getUsage = async (req, res) => {
-  const user = await User.findById(req.user.id).select("plan dailyScans lastScanReset");
+  const user = await User.findById(req.user.id).select("plan weeklyCredits weekStart");
   if (!user) throw new ApiError(404, "User not found");
 
   const plan = user.plan || "free";
-  const limits = PLAN_LIMITS[plan] || PLAN_LIMITS.free;
+  const isPro = plan === "pro";
 
   const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const day = now.getUTCDay();
+  const diff = day === 0 ? 6 : day - 1;
+  const currentMonday = new Date(now);
+  currentMonday.setUTCDate(now.getUTCDate() - diff);
+  currentMonday.setUTCHours(0, 0, 0, 0);
+
+  let weeklyCredits = user.weeklyCredits || 0;
+  if (!user.weekStart || user.weekStart < currentMonday) {
+    weeklyCredits = 0;
+  }
+
   const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-  const lastReset = user.lastScanReset || now;
-  const isNewDay = lastReset.toISOString().slice(0, 10) !== now.toISOString().slice(0, 10);
-  const dailyScans = isNewDay
-    ? { text: 0, url: 0, image: 0 }
-    : user.dailyScans || { text: 0, url: 0, image: 0 };
 
   const [weeklyScans, monthlyScans, allTimeScans, recentScans, recentDocs, monthlyDocCount, allTimeDocCount] =
     await Promise.all([
@@ -416,33 +423,35 @@ exports.getUsage = async (req, res) => {
   ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   const docsUsedThisMonth = monthlyDocCount;
-  const docsLimit = limits.documents === Infinity ? null : limits.documents;
+  const docsLimit = isPro ? null : 5;
   const docsRemaining = docsLimit !== null ? Math.max(0, docsLimit - docsUsedThisMonth) : null;
+
+  const weeklyLimit = isPro ? null : 20;
+  const weeklyRemaining = weeklyLimit !== null ? Math.max(0, weeklyLimit - weeklyCredits) : null;
 
   res.json({
     success: true,
     data: {
       plan,
       limits: {
-        text: limits.text,
-        url: limits.url,
-        image: limits.image,
+        weeklyCredits: weeklyLimit,
         documents: docsLimit,
       },
-      daily: {
-        text: { used: dailyScans.text, limit: limits.text, remaining: Math.max(0, limits.text - dailyScans.text) },
-        url: { used: dailyScans.url, limit: limits.url, remaining: Math.max(0, limits.url - dailyScans.url) },
-        image: { used: dailyScans.image, limit: limits.image, remaining: Math.max(0, limits.image - dailyScans.image) },
-        documents: {
-          used: docsUsedThisMonth,
-          limit: docsLimit,
-          remaining: docsRemaining,
-          note: docsLimit !== null ? "Monthly limit" : "Unlimited",
-        },
+      weekly: {
+        used: weeklyCredits,
+        limit: weeklyLimit,
+        remaining: weeklyRemaining,
+        ...weekly,
+        total: weeklyTotal,
       },
-      weekly: { ...weekly, total: weeklyTotal },
       monthly: { ...monthly, total: monthlyScanTotal, documents: docsUsedThisMonth },
       allTime: { ...allTime, total: allTimeTotal, documents: allTimeDocCount },
+      documents: {
+        used: docsUsedThisMonth,
+        limit: docsLimit,
+        remaining: docsRemaining,
+        note: docsLimit !== null ? "Monthly limit" : "Unlimited",
+      },
       recentActivity,
     },
   });

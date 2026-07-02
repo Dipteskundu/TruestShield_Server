@@ -22,11 +22,11 @@ async function setCache(key, value, ttlSeconds = 86400) {
   ]);
 }
 
-async function incrementRateLimit(key) {
+async function incrementRateLimit(key, ttlSeconds = 86400) {
   if (!isConfigured) return 1;
   const count = await redisCommand(["INCR", key]);
   if (count === 1) {
-    await redisCommand(["EXPIRE", key, "86400"]);
+    await redisCommand(["EXPIRE", key, String(ttlSeconds)]);
   }
   return count;
 }
