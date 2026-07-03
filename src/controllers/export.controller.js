@@ -23,12 +23,16 @@ exports.exportReport = async (req, res) => {
       "TrustShield is not legal advice. It is a legal literacy tool. Consult a qualified attorney for binding decisions.",
     executiveSummary: document.executiveSummary,
     overallRiskScore: document.overallRiskScore,
+    missingProtections: document.missingProtections || [],
+    glossary: document.glossary || [],
     clauses: clauses.map((c) => ({
       index: c.clauseIndex,
       originalText: c.originalText,
       plainExplanation: c.plainExplanation,
       riskLevel: c.riskLevel,
       riskReason: c.riskReason,
+      keyTerms: c.keyTerms || [],
+      missingProtections: c.missingProtections || [],
     })),
     generatedAt: new Date().toISOString(),
   };

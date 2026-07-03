@@ -26,14 +26,18 @@ const documentSchema = new mongoose.Schema(
     overallRiskScore: { type: Number, min: 0, max: 100, default: 0 },
     executiveSummary: { type: String, default: "" },
     glossary: [{ term: String, definition: String }],
+    missingProtections: [{ type: String }],
     status: {
       type: String,
       enum: ["processing", "ready", "failed"],
       default: "processing",
     },
     shareToken: { type: String },
+    expiresAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
+
+documentSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 module.exports = mongoose.model("Document", documentSchema);

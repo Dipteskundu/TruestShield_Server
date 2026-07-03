@@ -2,14 +2,14 @@ const Document = require("../models/Document");
 const Clause = require("../models/Clause");
 const ChatMessage = require("../models/ChatMessage");
 const ApiError = require("../utils/apiError");
-const { extractTextFromPdf, chunkByClauses } = require("../services/pdfService");
-const { analyzeClauses } = require("../services/aiService");
+const { extractTextFromPdf, smartChunkClauses } = require("../services/pdfService");
+const { analyzeClauses, aggregateDocumentAnalysis, answerDocumentQuestion } = require("../services/aiService");
 const { generateEmbedding } = require("../services/embeddingService");
 const { uploadBuffer } = require("../services/cloudinaryService");
 
 async function processDocument(documentId, rawText, documentType) {
   try {
-    const clauses = chunkByClauses(rawText);
+    const clauses = await smartChunkClauses(rawText, documentType);
     const analyzed = await analyzeClauses(clauses, documentType);
 
     const clauseDocs = await Promise.all(
@@ -23,18 +23,21 @@ async function processDocument(documentId, rawText, documentType) {
       })
     );
 
-    const highRiskCount = clauseDocs.filter((c) => c.riskLevel === "high").length;
-    const overallRiskScore = Math.min(
-      100,
-      Math.round((highRiskCount / Math.max(clauseDocs.length, 1)) * 100)
-    );
+    const allMissingProtections = [
+      ...new Set(clauseDocs.flatMap((c) => c.missingProtections || [])),
+    ];
+
+    const aggregation = await aggregateDocumentAnalysis(clauseDocs, documentType);
 
     await Document.findByIdAndUpdate(documentId, {
       status: "ready",
-      overallRiskScore,
-      executiveSummary: `This ${documentType} document contains ${clauseDocs.length} analyzed clauses. ${highRiskCount} clause(s) flagged as high risk. TrustShield is not legal advice — consult a qualified attorney for binding decisions.`,
+      overallRiskScore: aggregation.overallRiskScore,
+      executiveSummary: aggregation.executiveSummary,
+      glossary: aggregation.glossary,
+      missingProtections: allMissingProtections,
     });
-  } catch {
+  } catch (error) {
+    console.error("Document processing failed:", error);
     await Document.findByIdAndUpdate(documentId, { status: "failed" });
   }
 }
@@ -75,6 +78,7 @@ exports.upload = async (req, res) => {
       fileName: document.fileName,
       documentType: document.documentType,
       status: document.status,
+      creditsUsed: req.creditCount,
     },
   });
 };
@@ -101,7 +105,7 @@ exports.getStatus = async (req, res) => {
   const document = await Document.findOne({
     _id: req.params.id,
     userId: req.user.id,
-  }).select("status overallRiskScore executiveSummary");
+  }).select("status overallRiskScore executiveSummary glossary missingProtections");
 
   if (!document) throw new ApiError(404, "Document not found");
 
@@ -138,11 +142,11 @@ exports.chat = async (req, res) => {
     throw new ApiError(400, "Document is still processing");
   }
 
-  const clauses = await Clause.find({ documentId: document._id }).limit(10);
-  const { answerDocumentQuestion } = require("../services/aiService");
+  const clauses = await Clause.find({ documentId: document._id });
   const { answer, citedClauseIds } = await answerDocumentQuestion(
     question,
-    clauses
+    clauses,
+    document.documentType
   );
 
   await ChatMessage.create({
@@ -166,5 +170,81 @@ exports.chat = async (req, res) => {
       answer: assistantMessage.content,
       citedClauseIds: assistantMessage.citedClauseIds,
     },
+  });
+};
+
+exports.getChatHistory = async (req, res) => {
+  const document = await Document.findOne({
+    _id: req.params.id,
+    userId: req.user.id,
+  });
+
+  if (!document) throw new ApiError(404, "Document not found");
+
+  const { before, limit = 50 } = req.query;
+  const query = { documentId: document._id, userId: req.user.id };
+
+  if (before) {
+    query.createdAt = { $lt: new Date(before) };
+  }
+
+  const messages = await ChatMessage.find(query)
+    .sort({ createdAt: -1 })
+    .limit(parseInt(limit))
+    .select("role content citedClauseIds createdAt");
+
+  res.json({
+    success: true,
+    data: messages.reverse(),
+  });
+};
+
+exports.share = async (req, res) => {
+  const document = await Document.findOne({
+    _id: req.params.id,
+    userId: req.user.id,
+  });
+
+  if (!document) throw new ApiError(404, "Document not found");
+
+  let shareToken = document.shareToken;
+  if (!shareToken) {
+    const crypto = require("crypto");
+    shareToken = crypto.randomBytes(32).toString("hex");
+
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7);
+
+    await Document.findByIdAndUpdate(document._id, {
+      shareToken,
+      expiresAt,
+    });
+  }
+
+  res.json({
+    success: true,
+    data: {
+      shareToken,
+      shareUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/result/${shareToken}`,
+      expiresAt: document.expiresAt,
+    },
+  });
+};
+
+exports.getPublicByToken = async (req, res) => {
+  const document = await Document.findOne({
+    shareToken: req.params.token,
+    status: "ready",
+  }).select("fileName documentType overallRiskScore executiveSummary glossary createdAt");
+
+  if (!document) throw new ApiError(404, "Document not found or not shared");
+
+  const clauses = await Clause.find({ documentId: document._id })
+    .sort({ clauseIndex: 1 })
+    .select("clauseIndex originalText plainExplanation riskLevel riskReason");
+
+  res.json({
+    success: true,
+    data: { document, clauses },
   });
 };

@@ -1,5 +1,6 @@
 const { callWithUserPreference, decrypt } = require("./aiProviderService");
 const crypto = require("crypto");
+const { generateEmbedding } = require("./embeddingService");
 
 const FRAUD_SIGNALS = {
   email: [
@@ -51,21 +52,13 @@ function generateMockResponse(type) {
   const reasons = pickRandom(allSignals, count);
 
   const dangerousKeywords = [
-    "banking details",
-    "upfront payment",
-    "gift cards",
-    "SSN",
-    "password",
-    "lottery",
-    "inheritance",
-    "legal action",
-    "account suspended",
-    "wire transfer",
+    "banking details", "upfront payment", "gift cards", "SSN",
+    "password", "lottery", "inheritance", "legal action",
+    "account suspended", "wire transfer",
   ];
-  const hasDangerous =
-    reasons.some((r) =>
-      dangerousKeywords.some((k) => r.toLowerCase().includes(k))
-    );
+  const hasDangerous = reasons.some((r) =>
+    dangerousKeywords.some((k) => r.toLowerCase().includes(k))
+  );
   const hasSuspicious = reasons.length >= 3;
 
   let verdict, confidence;
@@ -117,19 +110,9 @@ function parseClaudeResponse(text, fallbackType) {
 
     const parsed = JSON.parse(jsonMatch[0]);
 
-    if (!["safe", "suspicious", "dangerous"].includes(parsed.verdict)) {
-      return null;
-    }
-    if (
-      typeof parsed.confidence !== "number" ||
-      parsed.confidence < 0 ||
-      parsed.confidence > 100
-    ) {
-      return null;
-    }
-    if (!Array.isArray(parsed.reasons) || parsed.reasons.length === 0) {
-      return null;
-    }
+    if (!["safe", "suspicious", "dangerous"].includes(parsed.verdict)) return null;
+    if (typeof parsed.confidence !== "number" || parsed.confidence < 0 || parsed.confidence > 100) return null;
+    if (!Array.isArray(parsed.reasons) || parsed.reasons.length === 0) return null;
 
     return parsed;
   } catch {
@@ -158,46 +141,203 @@ async function analyzeText(type, content, userPreferences = null) {
   return generateMockResponse(type);
 }
 
-async function analyzeClauses(clauses, documentType) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+const CLAUSE_ANALYSIS_PROMPT = `You are a legal document analyst for TrustShield. Analyze the following clause from a {documentType} document.
 
-  if (!apiKey) {
-    return clauses.map((text, index) => ({
-      clauseIndex: index,
-      originalText: text,
-      plainExplanation: `This clause (${documentType}) outlines obligations and rights in plain terms.`,
-      riskLevel: index % 3 === 0 ? "high" : index % 2 === 0 ? "medium" : "low",
-      riskReason:
-        index % 3 === 0
-          ? "May limit your ability to terminate the agreement early."
-          : "Standard contractual language with moderate implications.",
-      missingProtections: index === 0 ? ["Termination for convenience clause"] : [],
-      keyTerms: ["obligation", "liability"],
-    }));
-  }
-
-  // Production: batch Claude calls per clause
-  return clauses.map((text, index) => ({
-    clauseIndex: index,
-    originalText: text,
-    plainExplanation: `Analyzed clause ${index + 1} of your ${documentType} document.`,
-    riskLevel: "medium",
-    riskReason: "Review recommended — consult a qualified attorney for binding decisions.",
-    missingProtections: [],
-    keyTerms: [],
-  }));
+Return ONLY valid JSON with NO markdown wrapping. Schema:
+{
+  "plainExplanation": "<2-3 sentence plain-English explanation of what this clause means>",
+  "riskLevel": "low" | "medium" | "high",
+  "riskReason": "<1-2 sentences explaining WHY this risk level was assigned — reference specific financial exposure or rights lost>",
+  "missingProtections": ["<protection that standard contracts of this type include but this clause lacks>"],
+  "keyTerms": ["<legal term 1>", "<legal term 2>"]
 }
 
-async function answerDocumentQuestion(question, clauses) {
-  const context = clauses
-    .slice(0, 5)
-    .map((c, i) => `[Clause ${i + 1}] ${c.originalText}`)
-    .join("\n\n");
+Rules:
+- plainExplanation must be understandable by someone with no legal background
+- Use "may", "typically", "could mean" — never make absolute legal claims
+- riskLevel criteria: "high" = significant financial exposure or major rights lost, "medium" = moderate implications worth reviewing, "low" = standard/generally fair language
+- missingProtections: only list protections that are genuinely missing and commonly included in similar contracts. If the clause is fine, return an empty array.
+- keyTerms: list 2-5 legal terms from this clause that would benefit from a glossary definition
+- Never include markdown, code blocks, or extra text — raw JSON only`;
+
+async function analyzeClauses(clauses, documentType, userPreferences = null) {
+  const BATCH_SIZE = 5;
+  const results = [];
+
+  for (let i = 0; i < clauses.length; i += BATCH_SIZE) {
+    const batch = clauses.slice(i, i + BATCH_SIZE);
+
+    const batchResults = await Promise.all(
+      batch.map(async (text, batchIndex) => {
+        const clauseIndex = i + batchIndex;
+        const prompt = CLAUSE_ANALYSIS_PROMPT
+          .replace("{documentType}", documentType);
+
+        const messages = [
+          { role: "user", content: `${prompt}\n\nClause to analyze:\n${text.slice(0, 3000)}` },
+        ];
+
+        try {
+          const result = await callWithUserPreference(messages, userPreferences);
+          if (result) {
+            const jsonMatch = result.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              const parsed = JSON.parse(jsonMatch[0]);
+              if (parsed.plainExplanation && parsed.riskLevel) {
+                return {
+                  clauseIndex,
+                  originalText: text,
+                  plainExplanation: parsed.plainExplanation || "",
+                  riskLevel: ["low", "medium", "high"].includes(parsed.riskLevel) ? parsed.riskLevel : "medium",
+                  riskReason: parsed.riskReason || "Review recommended.",
+                  missingProtections: Array.isArray(parsed.missingProtections) ? parsed.missingProtections : [],
+                  keyTerms: Array.isArray(parsed.keyTerms) ? parsed.keyTerms : [],
+                };
+              }
+            }
+          }
+        } catch {
+          // Fall through to default
+        }
+
+        return {
+          clauseIndex,
+          originalText: text,
+          plainExplanation: `This clause outlines obligations and rights related to the ${documentType} agreement.`,
+          riskLevel: "medium",
+          riskReason: "Review recommended — consult a qualified attorney for binding decisions.",
+          missingProtections: [],
+          keyTerms: [],
+        };
+      })
+    );
+
+    results.push(...batchResults);
+  }
+
+  return results.sort((a, b) => a.clauseIndex - b.clauseIndex);
+}
+
+const AGGREGATION_PROMPT = `You are a legal document analyst for TrustShield. You have already analyzed individual clauses of a {documentType} document. Now provide a document-level summary.
+
+Here are the analyzed clauses:
+{clauseResults}
+
+Return ONLY valid JSON with NO markdown wrapping. Schema:
+{
+  "executiveSummary": "<3-4 sentence plain-English overview of the entire document — what it is, what it covers, and the overall risk level>",
+  "overallRiskScore": <number 0-100>,
+  "glossary": [
+    {"term": "<legal term>", "definition": "<plain-English definition as used in this document>"}
+  ]
+}
+
+Rules:
+- executiveSummary must be plain English, not legal jargon
+- overallRiskScore: 0-20 = low risk, 21-50 = moderate, 51-75 = high risk, 76-100 = very high risk
+- Weight the score: each high-risk clause adds more than medium, which adds more than low
+- glossary: define every unique legal term found across all clause keyTerms. Each definition should be specific to how the term is used in THIS document.
+- Never include markdown, code blocks, or extra text — raw JSON only`;
+
+async function aggregateDocumentAnalysis(clauses, documentType, userPreferences = null) {
+  const clauseSummary = clauses.map((c, i) =>
+    `Clause ${i + 1} [${c.riskLevel}]: ${c.originalText.slice(0, 500)}... → ${c.plainExplanation}`
+  ).join("\n");
+
+  const prompt = AGGREGATION_PROMPT
+    .replace("{documentType}", documentType)
+    .replace("{clauseResults}", clauseSummary);
+
+  const messages = [{ role: "user", content: prompt }];
+
+  try {
+    const result = await callWithUserPreference(messages, userPreferences);
+    if (result) {
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+          executiveSummary: parsed.executiveSummary || "",
+          overallRiskScore: Math.min(100, Math.max(0, parsed.overallRiskScore || 50)),
+          glossary: Array.isArray(parsed.glossary) ? parsed.glossary : [],
+        };
+      }
+    }
+  } catch {
+    // Fall through to manual aggregation
+  }
+
+  const highCount = clauses.filter((c) => c.riskLevel === "high").length;
+  const mediumCount = clauses.filter((c) => c.riskLevel === "medium").length;
+  const lowCount = clauses.filter((c) => c.riskLevel === "low").length;
+  const total = clauses.length || 1;
+  const weightedScore = Math.round(((highCount * 3 + mediumCount * 2 + lowCount * 1) / (total * 3)) * 100);
+
+  const allKeyTerms = [...new Set(clauses.flatMap((c) => c.keyTerms || []))];
+  const glossary = allKeyTerms.map((term) => ({
+    term,
+    definition: `${term} — a legal term used in this document. Consult a legal professional for the precise definition in your jurisdiction.`,
+  }));
 
   return {
-    answer: `Based on the document, here's what I found regarding your question: "${question}". The relevant sections suggest you should review clauses related to obligations and termination. This is not legal advice — consult a qualified attorney for decisions with significant consequences.`,
+    executiveSummary: `This ${documentType} document contains ${total} analyzed clauses. ${highCount} are flagged as high risk, ${mediumCount} as medium risk. TrustShield is not legal advice — consult a qualified attorney for binding decisions.`,
+    overallRiskScore: Math.min(100, weightedScore),
+    glossary,
+  };
+}
+
+async function answerDocumentQuestion(question, clauses, documentType = "document", userPreferences = null) {
+  const context = clauses
+    .map((c, i) => `[Clause ${c.clauseIndex + 1} — Risk: ${c.riskLevel}]\n${c.originalText}\nPlain English: ${c.plainExplanation}`)
+    .join("\n\n");
+
+  const prompt = `You are a document analysis assistant for TrustShield. Answer the user's question using ONLY the provided clauses from their ${documentType} document.
+
+IMPORTANT RULES:
+- Only answer based on the clauses provided below. Do not use outside knowledge.
+- Always cite which clause(s) your answer is based on by referencing their clause numbers.
+- Use plain English — avoid legal jargon.
+- Use "may", "typically", "could mean" — never make absolute legal claims.
+- Start your answer with the most relevant information, then add context if needed.
+- If the answer is not in the provided clauses, say so clearly.
+
+Clauses from the document:
+${context}
+
+User question: ${question}
+
+Return ONLY valid JSON with NO markdown wrapping. Schema:
+{
+  "answer": "<plain-English answer citing specific clause numbers>",
+  "citedClauseIndices": [<1-based clause index numbers>]
+}`;
+
+  const messages = [{ role: "user", content: prompt }];
+
+  try {
+    const result = await callWithUserPreference(messages, userPreferences);
+    if (result) {
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed.answer) {
+          const citedIndices = Array.isArray(parsed.citedClauseIndices) ? parsed.citedClauseIndices : [];
+          const citedClauseIds = citedIndices
+            .filter((idx) => idx >= 1 && idx <= clauses.length)
+            .map((idx) => clauses[idx - 1]._id);
+
+          return { answer: parsed.answer, citedClauseIds };
+        }
+      }
+    }
+  } catch {
+    // Fall through to fallback
+  }
+
+  return {
+    answer: `Based on the document, here's what I found regarding your question: "${question}". The relevant sections suggest reviewing the clauses related to obligations and key terms. This is not legal advice — consult a qualified attorney for decisions with significant consequences.`,
     citedClauseIds: clauses.slice(0, 2).map((c) => c._id),
   };
 }
 
-module.exports = { analyzeText, analyzeClauses, answerDocumentQuestion };
+module.exports = { analyzeText, analyzeClauses, aggregateDocumentAnalysis, answerDocumentQuestion };

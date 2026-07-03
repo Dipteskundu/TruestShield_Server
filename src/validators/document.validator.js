@@ -33,4 +33,10 @@ const documentIdSchema = z.object({
   }),
 });
 
-module.exports = { documentUploadSchema, chatSchema, documentIdSchema };
+const documentTokenSchema = z.object({
+  params: z.object({
+    token: z.string().min(1),
+  }),
+});
+
+module.exports = { documentUploadSchema, chatSchema, documentIdSchema, documentTokenSchema };
