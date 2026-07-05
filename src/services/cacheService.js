@@ -31,4 +31,9 @@ async function incrementRateLimit(key, ttlSeconds = 86400) {
   return count;
 }
 
-module.exports = { hashInput, getCache, setCache, incrementRateLimit };
+async function deleteCache(key) {
+  if (!isConfigured) return;
+  await redisCommand(["DEL", key]);
+}
+
+module.exports = { hashInput, getCache, setCache, incrementRateLimit, deleteCache };

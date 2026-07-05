@@ -15,6 +15,13 @@ const documentUploadSchema = z.object({
       .optional(),
     text: z.string().min(50).optional(),
     fileName: z.string().optional(),
+    autoDeleteDays: z
+      .number()
+      .int()
+      .refine((v) => [1, 7, 30, 90, 365].includes(v), {
+        message: "Must be 1, 7, 30, 90, or 365",
+      })
+      .optional(),
   }),
 });
 

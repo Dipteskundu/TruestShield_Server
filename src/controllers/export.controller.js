@@ -1,6 +1,7 @@
 const Document = require("../models/Document");
 const Clause = require("../models/Clause");
 const ApiError = require("../utils/apiError");
+const { generatePdf } = require("../services/pdfGeneratorService");
 
 exports.exportReport = async (req, res) => {
   const document = await Document.findOne({
@@ -37,10 +38,12 @@ exports.exportReport = async (req, res) => {
     generatedAt: new Date().toISOString(),
   };
 
-  res.setHeader("Content-Type", "application/json");
+  const pdfBuffer = await generatePdf(report);
+
+  res.setHeader("Content-Type", "application/pdf");
   res.setHeader(
     "Content-Disposition",
-    `attachment; filename="trustshield-report-${document._id}.json"`
+    `attachment; filename="trustshield-report-${document._id}.pdf"`
   );
-  res.json(report);
+  res.send(pdfBuffer);
 };

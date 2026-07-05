@@ -1,5 +1,7 @@
 const ScanResult = require("../models/ScanResult");
 const Document = require("../models/Document");
+const Clause = require("../models/Clause");
+const ChatMessage = require("../models/ChatMessage");
 const User = require("../models/User");
 const ApiError = require("../utils/apiError");
 const { encrypt, maskKey } = require("../services/encryptionService");
@@ -593,4 +595,45 @@ exports.testProvider = async (req, res) => {
       responsePreview: result.responsePreview,
     },
   });
+};
+
+exports.deleteAccount = async (req, res) => {
+  const { password } = req.body;
+
+  if (!password) {
+    throw new ApiError(400, "Password is required to delete your account");
+  }
+
+  const user = await User.findById(req.user.id).select("+password");
+  if (!user) throw new ApiError(404, "User not found");
+
+  const isMatch = await user.comparePassword(password);
+  if (!isMatch) throw new ApiError(401, "Incorrect password");
+
+  const userId = user._id;
+
+  // Find all user documents to cascade-delete clauses
+  const userDocuments = await Document.find({ userId }).select("_id");
+  const docIds = userDocuments.map((d) => d._id);
+
+  // Cascade delete related data
+  await Promise.all([
+    docIds.length > 0 ? Clause.deleteMany({ documentId: { $in: docIds } }) : Promise.resolve(),
+    ChatMessage.deleteMany({ userId }),
+    Document.deleteMany({ userId }),
+    ScanResult.deleteMany({ userId }),
+  ]);
+
+  // Remove avatar from Cloudinary
+  if (user.avatar?.publicId) {
+    try {
+      await cloudinary.uploader.destroy(user.avatar.publicId);
+    } catch {
+      // Ignore deletion errors
+    }
+  }
+
+  await User.findByIdAndDelete(userId);
+
+  res.json({ success: true, message: "Account deleted permanently" });
 };

@@ -15,6 +15,7 @@ router.put("/profile", asyncHandler(userController.updateProfile));
 router.put("/password", asyncHandler(userController.changePassword));
 router.post("/avatar", uploadImage, asyncHandler(userController.uploadAvatar));
 router.delete("/avatar", asyncHandler(userController.removeAvatar));
+router.delete("/account", asyncHandler(userController.deleteAccount));
 router.get("/history", asyncHandler(userController.getHistory));
 router.get("/stats", asyncHandler(userController.getStats));
 router.get("/scans/remaining", asyncHandler(userController.getRemainingScans));

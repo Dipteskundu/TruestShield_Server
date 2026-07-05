@@ -6,6 +6,9 @@ const { extractTextFromPdf, smartChunkClauses } = require("../services/pdfServic
 const { analyzeClauses, aggregateDocumentAnalysis, answerDocumentQuestion } = require("../services/aiService");
 const { generateEmbedding } = require("../services/embeddingService");
 const { uploadBuffer } = require("../services/cloudinaryService");
+const { findRelevantClauses } = require("../utils/vectorSearch");
+
+const VALID_AUTO_DELETE_DAYS = [1, 7, 30, 90, 365];
 
 async function processDocument(documentId, rawText, documentType) {
   try {
@@ -43,7 +46,7 @@ async function processDocument(documentId, rawText, documentType) {
 }
 
 exports.upload = async (req, res) => {
-  const { documentType = "other", text, fileName } = req.validated.body;
+  const { documentType = "other", text, fileName, autoDeleteDays } = req.validated.body;
   let rawText = text || "";
   let resolvedFileName = fileName || "Pasted Text";
 
@@ -61,13 +64,21 @@ exports.upload = async (req, res) => {
     throw new ApiError(400, "Document text must be at least 50 characters");
   }
 
-  const document = await Document.create({
+  const docData = {
     userId: req.user.id,
     fileName: resolvedFileName,
     documentType,
     rawText: rawText.slice(0, 50000),
     status: "processing",
-  });
+  };
+
+  if (autoDeleteDays && VALID_AUTO_DELETE_DAYS.includes(autoDeleteDays)) {
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + autoDeleteDays);
+    docData.expiresAt = expiresAt;
+  }
+
+  const document = await Document.create(docData);
 
   processDocument(document._id, rawText, documentType);
 
@@ -142,10 +153,20 @@ exports.chat = async (req, res) => {
     throw new ApiError(400, "Document is still processing");
   }
 
-  const clauses = await Clause.find({ documentId: document._id });
+  const allClauses = await Clause.find({ documentId: document._id });
+
+  let relevantClauses = allClauses;
+  try {
+    const questionEmbedding = await generateEmbedding(question);
+    const topK = allClauses.length <= 5 ? allClauses.length : 5;
+    relevantClauses = findRelevantClauses(questionEmbedding, allClauses, topK);
+  } catch {
+    // Fallback: send all clauses if embedding fails
+  }
+
   const { answer, citedClauseIds } = await answerDocumentQuestion(
     question,
-    clauses,
+    relevantClauses,
     document.documentType
   );
 
@@ -246,5 +267,35 @@ exports.getPublicByToken = async (req, res) => {
   res.json({
     success: true,
     data: { document, clauses },
+  });
+};
+
+exports.updateAutoDelete = async (req, res) => {
+  const { days } = req.body;
+
+  const document = await Document.findOne({
+    _id: req.params.id,
+    userId: req.user.id,
+  });
+
+  if (!document) throw new ApiError(404, "Document not found");
+
+  let expiresAt = null;
+  if (days !== null && days !== undefined) {
+    if (!VALID_AUTO_DELETE_DAYS.includes(days)) {
+      throw new ApiError(400, `Invalid auto-delete duration. Allowed: ${VALID_AUTO_DELETE_DAYS.join(", ")}, or null to disable.`);
+    }
+    expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + days);
+  }
+
+  await Document.findByIdAndUpdate(document._id, { expiresAt });
+
+  res.json({
+    success: true,
+    data: {
+      expiresAt,
+      autoDeleteDays: days || null,
+    },
   });
 };

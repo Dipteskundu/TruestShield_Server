@@ -69,4 +69,10 @@ router.post(
   asyncHandler(documentController.share)
 );
 
+router.patch(
+  "/:id/auto-delete",
+  validate(documentIdSchema),
+  asyncHandler(documentController.updateAutoDelete)
+);
+
 module.exports = router;

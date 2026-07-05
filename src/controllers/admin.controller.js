@@ -1,6 +1,13 @@
 const User = require("../models/User");
 const ScanResult = require("../models/ScanResult");
 const Document = require("../models/Document");
+const SystemConfig = require("../models/SystemConfig");
+const { deleteCache } = require("../services/cacheService");
+
+const DEFAULT_RATE_LIMITS = {
+  free: { text: 50, url: 30, image: 20 },
+  pro: { text: 100, url: 60, image: 40 },
+};
 
 exports.getStats = async (_req, res) => {
   const [users, scans, documents] = await Promise.all([
@@ -35,4 +42,25 @@ exports.getRecentScans = async (_req, res) => {
     .select("type verdict confidence createdAt userId");
 
   res.json({ success: true, data: scans });
+};
+
+exports.getRateLimits = async (_req, res) => {
+  const config = await SystemConfig.findById("global");
+  const limits = config?.rateLimits || DEFAULT_RATE_LIMITS;
+
+  res.json({ success: true, data: limits });
+};
+
+exports.updateRateLimits = async (req, res) => {
+  const { free, pro } = req.body;
+
+  const config = await SystemConfig.findByIdAndUpdate(
+    "global",
+    { rateLimits: { free, pro } },
+    { new: true, upsert: true, runValidators: true }
+  );
+
+  await deleteCache("config:rateLimits");
+
+  res.json({ success: true, data: config.rateLimits });
 };
