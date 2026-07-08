@@ -4,7 +4,6 @@ const { analyzeText } = require("../services/aiService");
 const { scanUrl } = require("../services/urlSafetyService");
 const { analyzeImage } = require("../services/visionService");
 const { hashInput, getCache, setCache } = require("../services/cacheService");
-const { decrypt } = require("../services/encryptionService");
 const ApiError = require("../utils/apiError");
 
 async function scanText(req, res) {

@@ -41,7 +41,11 @@ async function processDocument(documentId, rawText, documentType) {
     });
   } catch (error) {
     console.error("Document processing failed:", error);
-    await Document.findByIdAndUpdate(documentId, { status: "failed" });
+    try {
+      await Document.findByIdAndUpdate(documentId, { status: "failed" });
+    } catch (updateError) {
+      console.error("Failed to mark document as failed:", updateError);
+    }
   }
 }
 
@@ -236,9 +240,18 @@ exports.share = async (req, res) => {
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
 
-    await Document.findByIdAndUpdate(document._id, {
+    const updated = await Document.findByIdAndUpdate(document._id, {
       shareToken,
       expiresAt,
+    }, { new: true });
+
+    return res.json({
+      success: true,
+      data: {
+        shareToken: updated.shareToken,
+        shareUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/result/${updated.shareToken}`,
+        expiresAt: updated.expiresAt,
+      },
     });
   }
 

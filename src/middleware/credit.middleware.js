@@ -31,106 +31,106 @@ const DOCUMENT_MONTHLY_LIMIT = 5;
 
 function creditMiddleware(module) {
   return async (req, _res, next) => {
-    const userId = req.user?.id;
+    try {
+      const userId = req.user?.id;
 
-    // Guest: tracked per module + IP in Redis
-    if (!userId) {
-      const ip = req.ip || req.connection?.remoteAddress || "unknown";
-      const week = getCurrentWeek();
-      const key = `credits:guest:${module}:${ip}:${week}`;
-      const count = await incrementRateLimit(key, 604800);
+      // Guest: tracked per module + IP in Redis
+      if (!userId) {
+        const ip = req.ip || req.connection?.remoteAddress || "unknown";
+        const week = getCurrentWeek();
+        const key = `credits:guest:${module}:${ip}:${week}`;
+        const count = await incrementRateLimit(key, 604800);
 
-      req.creditCount = count;
+        req.creditCount = count;
 
-      if (count > 2) {
+        if (count > 2) {
+          return next(
+            new ApiError(429, "Please login to continue scanning")
+          );
+        }
+
+        return next();
+      }
+
+      // Pro: unlimited
+      const user = await User.findById(userId).select(
+        "plan weeklyCredits weekStart documentCredits documentMonthStart"
+      );
+      if (user?.plan === "pro") {
+        return next();
+      }
+
+      // Registered free: weekly credits shared across modules
+      const currentMonday = getCurrentWeekMonday();
+      let weeklyCredits = user?.weeklyCredits || 0;
+      const weekStart = user?.weekStart;
+
+      if (!weekStart || weekStart < currentMonday) {
+        weeklyCredits = 0;
+        await User.findByIdAndUpdate(userId, {
+          weeklyCredits: 0,
+          weekStart: currentMonday,
+        });
+      }
+
+      if (weeklyCredits >= WEEKLY_LIMIT) {
         return next(
-          new ApiError(429, "guest_limit", "Please login to continue scanning")
+          new ApiError(429, "Weekly credit limit reached. Upgrade to Pro for unlimited scans.")
         );
       }
 
-      return next();
+      await User.findByIdAndUpdate(userId, { $inc: { weeklyCredits: 1 } });
+
+      req.creditCount = weeklyCredits + 1;
+      next();
+    } catch (error) {
+      next(error);
     }
-
-    // Pro: unlimited
-    const user = await User.findById(userId).select(
-      "plan weeklyCredits weekStart documentCredits documentMonthStart"
-    );
-    if (user?.plan === "pro") {
-      return next();
-    }
-
-    // Registered free: weekly credits shared across modules
-    const currentMonday = getCurrentWeekMonday();
-    let weeklyCredits = user?.weeklyCredits || 0;
-    const weekStart = user?.weekStart;
-
-    if (!weekStart || weekStart < currentMonday) {
-      weeklyCredits = 0;
-      await User.findByIdAndUpdate(userId, {
-        weeklyCredits: 0,
-        weekStart: currentMonday,
-      });
-    }
-
-    if (weeklyCredits >= WEEKLY_LIMIT) {
-      return next(
-        new ApiError(
-          429,
-          "credit_limit",
-          "Weekly credit limit reached. Upgrade to Pro for unlimited scans."
-        )
-      );
-    }
-
-    await User.findByIdAndUpdate(userId, { $inc: { weeklyCredits: 1 } });
-
-    req.creditCount = weeklyCredits + 1;
-    next();
   };
 }
 
 function documentCreditMiddleware() {
   return async (req, _res, next) => {
-    const userId = req.user?.id;
+    try {
+      const userId = req.user?.id;
 
-    if (!userId) {
-      return next(new ApiError(401, "Authentication required for document analysis"));
-    }
+      if (!userId) {
+        return next(new ApiError(401, "Authentication required for document analysis"));
+      }
 
-    const user = await User.findById(userId).select(
-      "plan documentCredits documentMonthStart"
-    );
-
-    if (user?.plan === "pro") {
-      return next();
-    }
-
-    const currentMonthStart = getCurrentMonthStart();
-    let documentCredits = user?.documentCredits || 0;
-    const monthStart = user?.documentMonthStart;
-
-    if (!monthStart || monthStart < currentMonthStart) {
-      documentCredits = 0;
-      await User.findByIdAndUpdate(userId, {
-        documentCredits: 0,
-        documentMonthStart: currentMonthStart,
-      });
-    }
-
-    if (documentCredits >= DOCUMENT_MONTHLY_LIMIT) {
-      return next(
-        new ApiError(
-          429,
-          "document_limit",
-          "Monthly document limit reached (5/month on free plan). Upgrade to Pro for unlimited."
-        )
+      const user = await User.findById(userId).select(
+        "plan documentCredits documentMonthStart"
       );
+
+      if (user?.plan === "pro") {
+        return next();
+      }
+
+      const currentMonthStart = getCurrentMonthStart();
+      let documentCredits = user?.documentCredits || 0;
+      const monthStart = user?.documentMonthStart;
+
+      if (!monthStart || monthStart < currentMonthStart) {
+        documentCredits = 0;
+        await User.findByIdAndUpdate(userId, {
+          documentCredits: 0,
+          documentMonthStart: currentMonthStart,
+        });
+      }
+
+      if (documentCredits >= DOCUMENT_MONTHLY_LIMIT) {
+        return next(
+          new ApiError(429, "Monthly document limit reached (5/month on free plan). Upgrade to Pro for unlimited.")
+        );
+      }
+
+      await User.findByIdAndUpdate(userId, { $inc: { documentCredits: 1 } });
+
+      req.creditCount = documentCredits + 1;
+      next();
+    } catch (error) {
+      next(error);
     }
-
-    await User.findByIdAndUpdate(userId, { $inc: { documentCredits: 1 } });
-
-    req.creditCount = documentCredits + 1;
-    next();
   };
 }
 

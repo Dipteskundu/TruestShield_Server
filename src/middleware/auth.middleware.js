@@ -39,16 +39,20 @@ function optionalAuth(req, _res, next) {
 }
 
 async function adminMiddleware(req, _res, next) {
-  if (!req.user?.id) {
-    return next(new ApiError(401, "Authentication required"));
-  }
+  try {
+    if (!req.user?.id) {
+      return next(new ApiError(401, "Authentication required"));
+    }
 
-  const user = await User.findById(req.user.id);
-  if (!user || user.role !== "admin") {
-    return next(new ApiError(403, "Admin access required"));
-  }
+    const user = await User.findById(req.user.id);
+    if (!user || user.role !== "admin") {
+      return next(new ApiError(403, "Admin access required"));
+    }
 
-  next();
+    next();
+  } catch (error) {
+    next(error);
+  }
 }
 
 module.exports = { authMiddleware, optionalAuth, adminMiddleware };

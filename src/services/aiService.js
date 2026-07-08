@@ -1,6 +1,5 @@
-const { callWithUserPreference, decrypt } = require("./aiProviderService");
+const { callWithUserPreference } = require("./aiProviderService");
 const crypto = require("crypto");
-const { generateEmbedding } = require("./embeddingService");
 
 const FRAUD_SIGNALS = {
   email: [
@@ -77,7 +76,8 @@ function generateMockResponse(type) {
 }
 
 function buildSystemPrompt(type) {
-  const signalList = FRAUD_SIGNALS[type]
+  const signals = FRAUD_SIGNALS[type] || FRAUD_SIGNALS.email;
+  const signalList = signals
     .map((s, i) => `${i + 1}. ${s}`)
     .join("\n");
 
