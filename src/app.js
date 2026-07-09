@@ -10,6 +10,8 @@ const scanRoutes = require("./routes/scan.routes");
 const documentRoutes = require("./routes/document.routes");
 const userRoutes = require("./routes/user.routes");
 const adminRoutes = require("./routes/admin.routes");
+const chatbotRoutes = require("./routes/chatbot.routes");
+const adminChatbotRoutes = require("./routes/adminChatbot.routes");
 
 const app = express();
 
@@ -49,6 +51,8 @@ app.use("/api/scan", scanRoutes);
 app.use("/api/documents", documentRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/chatbot", chatbotRoutes);
+app.use("/api/admin/chatbot", adminChatbotRoutes);
 
 app.use((_req, _res, next) => {
   next(new ApiError(404, "Route not found"));
