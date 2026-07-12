@@ -1,36 +1,48 @@
 const Document = require("../models/Document");
 const Clause = require("../models/Clause");
 const ChatMessage = require("../models/ChatMessage");
+const DocumentTreeNode = require("../models/DocumentTreeNode");
+const DocumentChatSession = require("../models/DocumentChatSession");
+const DocumentChatMessage = require("../models/DocumentChatMessage");
 const ApiError = require("../utils/apiError");
-const { extractTextFromPdf, smartChunkClauses } = require("../services/pdfService");
-const { analyzeClauses, aggregateDocumentAnalysis, answerDocumentQuestion } = require("../services/aiService");
-const { generateEmbedding } = require("../services/embeddingService");
+const {
+  extractTextFromPdf,
+  smartChunkClauses,
+} = require("../services/pdfService");
+const {
+  analyzeClauses,
+  aggregateDocumentAnalysis,
+} = require("../services/aiService");
+const { constructDocumentTree } = require("../services/treeService");
+const { answerDocumentQuery } = require("../services/navigationService");
 const { uploadBuffer } = require("../services/cloudinaryService");
-const { findRelevantClauses } = require("../utils/vectorSearch");
 
 const VALID_AUTO_DELETE_DAYS = [1, 7, 30, 90, 365];
 
-async function processDocument(documentId, rawText, documentType) {
+async function processDocument(documentId, rawText, documentType, pdfBuffer) {
   try {
     const clauses = await smartChunkClauses(rawText, documentType);
     const analyzed = await analyzeClauses(clauses, documentType);
 
-    const clauseDocs = await Promise.all(
+    await Promise.all(
       analyzed.map(async (clause) => {
-        const embedding = await generateEmbedding(clause.originalText);
         return Clause.create({
           documentId,
           ...clause,
-          embedding,
         });
       })
     );
 
+    const allClauseDocs = await Clause.find({ documentId });
+
     const allMissingProtections = [
-      ...new Set(clauseDocs.flatMap((c) => c.missingProtections || [])),
+      ...new Set(allClauseDocs.flatMap((c) => c.missingProtections || [])),
     ];
 
-    const aggregation = await aggregateDocumentAnalysis(clauseDocs, documentType);
+    const aggregation = await aggregateDocumentAnalysis(
+      allClauseDocs,
+      documentType
+    );
 
     await Document.findByIdAndUpdate(documentId, {
       status: "ready",
@@ -39,6 +51,17 @@ async function processDocument(documentId, rawText, documentType) {
       glossary: aggregation.glossary,
       missingProtections: allMissingProtections,
     });
+
+    if (pdfBuffer) {
+      try {
+        await constructDocumentTree(documentId, pdfBuffer, documentType);
+      } catch (treeError) {
+        console.error("Tree construction failed:", treeError);
+        await Document.findByIdAndUpdate(documentId, {
+          treeError: treeError.message,
+        });
+      }
+    }
   } catch (error) {
     console.error("Document processing failed:", error);
     try {
@@ -50,12 +73,19 @@ async function processDocument(documentId, rawText, documentType) {
 }
 
 exports.upload = async (req, res) => {
-  const { documentType = "other", text, fileName, autoDeleteDays } = req.validated.body;
+  const {
+    documentType = "other",
+    text,
+    fileName,
+    autoDeleteDays,
+  } = req.validated.body;
   let rawText = text || "";
   let resolvedFileName = fileName || "Pasted Text";
+  let pdfBuffer = null;
 
   if (req.file) {
     if (req.file.mimetype === "application/pdf") {
+      pdfBuffer = req.file.buffer;
       rawText = await extractTextFromPdf(req.file.buffer);
       resolvedFileName = req.file.originalname;
       await uploadBuffer(req.file.buffer, "trustshield/documents", "raw");
@@ -84,7 +114,7 @@ exports.upload = async (req, res) => {
 
   const document = await Document.create(docData);
 
-  processDocument(document._id, rawText, documentType);
+  processDocument(document._id, rawText, documentType, pdfBuffer);
 
   res.status(202).json({
     success: true,
@@ -120,7 +150,9 @@ exports.getStatus = async (req, res) => {
   const document = await Document.findOne({
     _id: req.params.id,
     userId: req.user.id,
-  }).select("status overallRiskScore executiveSummary glossary missingProtections");
+  }).select(
+    "status overallRiskScore executiveSummary glossary missingProtections treeBuilt treeError"
+  );
 
   if (!document) throw new ApiError(404, "Document not found");
 
@@ -130,7 +162,9 @@ exports.getStatus = async (req, res) => {
 exports.list = async (req, res) => {
   const documents = await Document.find({ userId: req.user.id })
     .sort({ createdAt: -1 })
-    .select("fileName documentType status overallRiskScore createdAt");
+    .select(
+      "fileName documentType status overallRiskScore createdAt treeBuilt"
+    );
 
   res.json({
     success: true,
@@ -141,6 +175,7 @@ exports.list = async (req, res) => {
       status: d.status,
       overallRiskScore: d.overallRiskScore,
       createdAt: d.createdAt,
+      treeBuilt: d.treeBuilt,
     })),
   });
 };
@@ -159,18 +194,9 @@ exports.chat = async (req, res) => {
 
   const allClauses = await Clause.find({ documentId: document._id });
 
-  let relevantClauses = allClauses;
-  try {
-    const questionEmbedding = await generateEmbedding(question);
-    const topK = allClauses.length <= 5 ? allClauses.length : 5;
-    relevantClauses = findRelevantClauses(questionEmbedding, allClauses, topK);
-  } catch {
-    // Fallback: send all clauses if embedding fails
-  }
-
-  const { answer, citedClauseIds } = await answerDocumentQuestion(
+  const { answer, citedClauseIds } = await require("../services/aiService").answerDocumentQuestion(
     question,
-    relevantClauses,
+    allClauses,
     document.documentType
   );
 
@@ -224,6 +250,139 @@ exports.getChatHistory = async (req, res) => {
   });
 };
 
+exports.getDocumentTree = async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
+
+  const document = await Document.findOne({ _id: id, userId });
+  if (!document) throw new ApiError(404, "Document not found");
+  if (!document.treeBuilt) throw new ApiError(202, "Tree is still being built");
+
+  const nodes = await DocumentTreeNode.find({ documentId: id })
+    .select("-content")
+    .sort({ level: 1, pageStart: 1 })
+    .lean();
+
+  function buildNested(nodes, parentId = null) {
+    return nodes
+      .filter((n) => n.parentId === parentId)
+      .map((n) => ({
+        ...n,
+        children: buildNested(nodes, n.nodeId),
+      }));
+  }
+
+  res.json({
+    success: true,
+    tree: buildNested(nodes),
+    flat: nodes,
+    nodeCount: document.nodeCount,
+    leafCount: document.leafCount,
+  });
+};
+
+exports.sendDocumentChatMessage = async (req, res) => {
+  const { id } = req.params;
+  const { message, sessionId } = req.body;
+  const userId = req.user.id;
+
+  const document = await Document.findOne({ _id: id, userId });
+  if (!document) throw new ApiError(404, "Document not found");
+  if (!document.treeBuilt) throw new ApiError(400, "Document tree is not ready yet");
+
+  let session;
+  if (sessionId) {
+    session = await DocumentChatSession.findOne({
+      _id: sessionId,
+      userId,
+      documentId: id,
+    });
+    if (!session) throw new ApiError(404, "Session not found");
+  } else {
+    session = await DocumentChatSession.create({
+      documentId: id,
+      userId,
+      title: message.slice(0, 60),
+    });
+  }
+
+  const history = await DocumentChatMessage.find({ sessionId: session._id })
+    .sort({ createdAt: 1 })
+    .select("role content")
+    .lean();
+
+  await DocumentChatMessage.create({
+    sessionId: session._id,
+    documentId: id,
+    userId,
+    role: "user",
+    content: message,
+  });
+
+  const result = await answerDocumentQuery(
+    message,
+    id,
+    history,
+    document.documentType
+  );
+
+  await DocumentChatMessage.create({
+    sessionId: session._id,
+    documentId: id,
+    userId,
+    role: "assistant",
+    content: result.answer,
+    citedNodeIds: result.citedNodeIds,
+    citedNodes: result.citedNodes,
+    navigationReasoning: result.navigationReasoning,
+    confidence: result.confidence,
+    nodesFound: result.nodesFound,
+  });
+
+  await DocumentChatSession.findByIdAndUpdate(session._id, {
+    lastMessageAt: new Date(),
+    $inc: { messageCount: 2 },
+    lastMessagePreview: result.answer.slice(0, 80),
+  });
+
+  res.json({
+    success: true,
+    sessionId: session._id,
+    answer: result.answer,
+    citedNodes: result.citedNodes,
+    confidence: result.confidence,
+    nodesFound: result.nodesFound,
+  });
+};
+
+exports.getChatSessions = async (req, res) => {
+  const { id } = req.params;
+  const sessions = await DocumentChatSession.find({
+    documentId: id,
+    userId: req.user.id,
+  }).sort({ lastMessageAt: -1 });
+
+  res.json({ success: true, sessions });
+};
+
+exports.getChatSession = async (req, res) => {
+  const { id, sessionId } = req.params;
+  const messages = await DocumentChatMessage.find({
+    sessionId,
+    documentId: id,
+    userId: req.user.id,
+  }).sort({ createdAt: 1 });
+
+  res.json({ success: true, messages });
+};
+
+exports.deleteChatSession = async (req, res) => {
+  const { sessionId } = req.params;
+  await DocumentChatMessage.deleteMany({ sessionId });
+  await DocumentChatSession.findByIdAndDelete(sessionId);
+  res.json({ success: true });
+};
+
 exports.share = async (req, res) => {
   const document = await Document.findOne({
     _id: req.params.id,
@@ -240,16 +399,19 @@ exports.share = async (req, res) => {
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
 
-    const updated = await Document.findByIdAndUpdate(document._id, {
-      shareToken,
-      expiresAt,
-    }, { new: true });
+    const updated = await Document.findByIdAndUpdate(
+      document._id,
+      { shareToken, expiresAt },
+      { new: true }
+    );
 
     return res.json({
       success: true,
       data: {
         shareToken: updated.shareToken,
-        shareUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/result/${updated.shareToken}`,
+        shareUrl: `${
+          process.env.FRONTEND_URL || "http://localhost:3000"
+        }/result/${updated.shareToken}`,
         expiresAt: updated.expiresAt,
       },
     });
@@ -259,7 +421,9 @@ exports.share = async (req, res) => {
     success: true,
     data: {
       shareToken,
-      shareUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/result/${shareToken}`,
+      shareUrl: `${
+        process.env.FRONTEND_URL || "http://localhost:3000"
+      }/result/${shareToken}`,
       expiresAt: document.expiresAt,
     },
   });
@@ -269,7 +433,9 @@ exports.getPublicByToken = async (req, res) => {
   const document = await Document.findOne({
     shareToken: req.params.token,
     status: "ready",
-  }).select("fileName documentType overallRiskScore executiveSummary glossary createdAt");
+  }).select(
+    "fileName documentType overallRiskScore executiveSummary glossary createdAt"
+  );
 
   if (!document) throw new ApiError(404, "Document not found or not shared");
 
@@ -296,7 +462,12 @@ exports.updateAutoDelete = async (req, res) => {
   let expiresAt = null;
   if (days !== null && days !== undefined) {
     if (!VALID_AUTO_DELETE_DAYS.includes(days)) {
-      throw new ApiError(400, `Invalid auto-delete duration. Allowed: ${VALID_AUTO_DELETE_DAYS.join(", ")}, or null to disable.`);
+      throw new ApiError(
+        400,
+        `Invalid auto-delete duration. Allowed: ${VALID_AUTO_DELETE_DAYS.join(
+          ", "
+        )}, or null to disable.`
+      );
     }
     expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + days);

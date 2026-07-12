@@ -10,6 +10,7 @@ const {
   chatSchema,
   documentIdSchema,
   documentTokenSchema,
+  documentChatMessageSchema,
 } = require("../validators/document.validator");
 const { uploadPdf } = require("../middleware/upload.middleware");
 
@@ -55,6 +56,36 @@ router.get(
   "/:id/chat",
   validate(documentIdSchema),
   asyncHandler(documentController.getChatHistory)
+);
+
+router.get(
+  "/:id/tree",
+  validate(documentIdSchema),
+  asyncHandler(documentController.getDocumentTree)
+);
+
+router.post(
+  "/:id/chat/message",
+  validate(documentChatMessageSchema),
+  asyncHandler(documentController.sendDocumentChatMessage)
+);
+
+router.get(
+  "/:id/chat/sessions",
+  validate(documentIdSchema),
+  asyncHandler(documentController.getChatSessions)
+);
+
+router.get(
+  "/:id/chat/sessions/:sessionId",
+  validate(documentIdSchema),
+  asyncHandler(documentController.getChatSession)
+);
+
+router.delete(
+  "/:id/chat/sessions/:sessionId",
+  validate(documentIdSchema),
+  asyncHandler(documentController.deleteChatSession)
 );
 
 router.get(

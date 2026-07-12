@@ -34,6 +34,12 @@ const documentSchema = new mongoose.Schema(
     },
     shareToken: { type: String },
     expiresAt: { type: Date, default: null },
+    treeBuilt: { type: Boolean, default: false },
+    treeBuiltAt: { type: Date, default: null },
+    treeVersion: { type: String, default: "v1" },
+    nodeCount: { type: Number, default: 0 },
+    leafCount: { type: Number, default: 0 },
+    treeError: { type: String, default: null },
   },
   { timestamps: true }
 );

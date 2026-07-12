@@ -18,7 +18,6 @@ const clauseSchema = new mongoose.Schema(
     riskReason: { type: String, default: "" },
     missingProtections: [{ type: String }],
     keyTerms: [{ type: String }],
-    embedding: [{ type: Number }],
   },
   { timestamps: true }
 );

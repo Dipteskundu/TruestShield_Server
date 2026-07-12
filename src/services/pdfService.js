@@ -15,6 +15,23 @@ async function extractTextFromPdf(buffer) {
   return data.text;
 }
 
+async function extractTextWithMetadata(pdfBuffer) {
+  const parser = await loadPdfParse();
+  const data = await parser(pdfBuffer);
+  const pages = data.text.split("\f").filter((p) => p.trim().length > 0);
+
+  return {
+    fullText: data.text,
+    pageCount: data.numpages,
+    pages,
+    metadata: {
+      title: data.info?.Title || null,
+      author: data.info?.Author || null,
+      subject: data.info?.Subject || null,
+    },
+  };
+}
+
 function chunkByClauses(text) {
   const normalized = text.replace(/\r\n/g, "\n").trim();
   const chunks = normalized
@@ -84,4 +101,4 @@ async function smartChunkClauses(text, documentType, userPreferences = null) {
   return chunkByClauses(text);
 }
 
-module.exports = { extractTextFromPdf, chunkByClauses, smartChunkClauses };
+module.exports = { extractTextFromPdf, extractTextWithMetadata, chunkByClauses, smartChunkClauses };

@@ -16,12 +16,14 @@ const documentUploadSchema = z.object({
     text: z.string().min(50).optional(),
     fileName: z.string().optional(),
     autoDeleteDays: z
-      .number()
-      .int()
-      .refine((v) => [1, 7, 30, 90, 365].includes(v), {
-        message: "Must be 1, 7, 30, 90, or 365",
-      })
-      .optional(),
+      .union([z.number().int(), z.string()])
+      .optional()
+      .transform((val) => {
+        if (val === undefined || val === null || val === "") return undefined;
+        const num = typeof val === "string" ? parseInt(val, 10) : val;
+        if (isNaN(num) || ![1, 7, 30, 90, 365].includes(num)) return undefined;
+        return num;
+      }),
   }),
 });
 
@@ -46,4 +48,20 @@ const documentTokenSchema = z.object({
   }),
 });
 
-module.exports = { documentUploadSchema, chatSchema, documentIdSchema, documentTokenSchema };
+const documentChatMessageSchema = z.object({
+  body: z.object({
+    message: z.string().min(1, "Message is required").max(2000, "Message must be under 2000 characters"),
+    sessionId: z.string().optional(),
+  }),
+  params: z.object({
+    id: z.string().min(1),
+  }),
+});
+
+module.exports = {
+  documentUploadSchema,
+  chatSchema,
+  documentIdSchema,
+  documentTokenSchema,
+  documentChatMessageSchema,
+};
