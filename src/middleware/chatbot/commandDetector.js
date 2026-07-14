@@ -31,7 +31,8 @@ async function commandDetector(req, res, next) {
 
     if (escalated) {
       return res.status(403).json({
-        success: true,
+        success: false,
+        message: "This session has been blocked due to repeated attempts to perform restricted operations.",
         data: {
           response:
             "This session has been blocked due to repeated attempts to perform " +

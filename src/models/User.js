@@ -5,6 +5,15 @@ const { maskKey } = require("../services/encryptionService");
 const userSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
+    username: {
+      type: String,
+      required: true,
+      unique: true,
+      trim: true,
+      lowercase: true,
+      minlength: 3,
+      maxlength: 30,
+    },
     email: {
       type: String,
       required: true,
@@ -12,7 +21,18 @@ const userSchema = new mongoose.Schema(
       lowercase: true,
       trim: true,
     },
-    password: { type: String, required: true, minlength: 8, select: false },
+    password: { type: String, minlength: 8, select: false },
+    gender: {
+      type: String,
+      enum: ["male", "female", "other", "prefer_not_to_say"],
+      default: "prefer_not_to_say",
+    },
+    city: { type: String, trim: true, default: "" },
+    provider: {
+      type: String,
+      enum: ["local", "google", "github"],
+      default: "local",
+    },
     role: {
       type: String,
       enum: ["user", "admin"],
@@ -60,7 +80,7 @@ const userSchema = new mongoose.Schema(
 );
 
 userSchema.pre("save", async function hashPassword(next) {
-  if (!this.isModified("password")) return next();
+  if (!this.isModified("password") || !this.password) return next();
   this.password = await bcrypt.hash(this.password, 12);
   next();
 });
@@ -83,7 +103,11 @@ userSchema.methods.toPublicJSON = function toPublicJSON() {
   return {
     id: this._id,
     name: this.name,
+    username: this.username,
     email: this.email,
+    gender: this.gender,
+    city: this.city,
+    provider: this.provider,
     role: this.role,
     plan: this.plan,
     avatar: this.avatar?.url || null,

@@ -4,8 +4,9 @@ function inputLimit(req, res, next) {
   const message = req.body.message || "";
 
   if (message.length > CHATBOT_MAX_INPUT_LENGTH) {
-    return res.status(400).json({
-      success: true,
+    return res.status(413).json({
+      success: false,
+      message: "That message is a bit long for me to process. Could you break it into a shorter question?",
       data: {
         response:
           "That message is a bit long for me to process. " +

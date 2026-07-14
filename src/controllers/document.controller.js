@@ -377,7 +377,13 @@ exports.getChatSession = async (req, res) => {
 };
 
 exports.deleteChatSession = async (req, res) => {
-  const { sessionId } = req.params;
+  const { id, sessionId } = req.params;
+  const session = await DocumentChatSession.findOne({
+    _id: sessionId,
+    documentId: id,
+    userId: req.user.id,
+  });
+  if (!session) throw new ApiError(404, "Session not found");
   await DocumentChatMessage.deleteMany({ sessionId });
   await DocumentChatSession.findByIdAndDelete(sessionId);
   res.json({ success: true });

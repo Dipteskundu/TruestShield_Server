@@ -128,17 +128,13 @@ async function analyzeText(type, content, userPreferences = null) {
     { role: "user", content: `${systemContent}\n\nContent to analyze:\n${truncatedContent}` },
   ];
 
-  try {
-    const result = await callWithUserPreference(messages, userPreferences);
-    if (result) {
-      const parsed = parseClaudeResponse(result, type);
-      if (parsed) return parsed;
-    }
-  } catch {
-    // Fall through to mock response
+  const result = await callWithUserPreference(messages, userPreferences);
+  if (result) {
+    const parsed = parseClaudeResponse(result, type);
+    if (parsed) return parsed;
   }
 
-  return generateMockResponse(type);
+  throw new Error("AI analysis returned an invalid response. Please try again.");
 }
 
 const CLAUSE_ANALYSIS_PROMPT = `You are a legal document analyst for TrustShield. Analyze the following clause from a {documentType} document.

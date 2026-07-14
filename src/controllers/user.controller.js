@@ -2,6 +2,11 @@ const ScanResult = require("../models/ScanResult");
 const Document = require("../models/Document");
 const Clause = require("../models/Clause");
 const ChatMessage = require("../models/ChatMessage");
+const ChatSession = require("../models/ChatSession");
+const ChatBotMessage = require("../models/ChatBotMessage");
+const DocumentChatSession = require("../models/DocumentChatSession");
+const DocumentChatMessage = require("../models/DocumentChatMessage");
+const DocumentTreeNode = require("../models/DocumentTreeNode");
 const User = require("../models/User");
 const ApiError = require("../utils/apiError");
 const { encrypt, maskKey } = require("../services/encryptionService");
@@ -16,7 +21,7 @@ exports.getProfile = async (req, res) => {
 };
 
 exports.updateProfile = async (req, res) => {
-  const { name, email } = req.body;
+  const { name, email, username, gender, city } = req.body;
   const updates = {};
 
   if (name) updates.name = name;
@@ -28,6 +33,23 @@ exports.updateProfile = async (req, res) => {
     if (existing) throw new ApiError(409, "Email already in use");
     updates.email = email.toLowerCase();
   }
+  if (username) {
+    const normalized = username.toLowerCase();
+    const existingUsername = await User.findOne({
+      username: normalized,
+      _id: { $ne: req.user.id },
+    });
+    if (existingUsername) throw new ApiError(409, "Username already taken");
+    updates.username = normalized;
+  }
+  if (gender) {
+    const validGenders = ["male", "female", "other", "prefer_not_to_say"];
+    if (!validGenders.includes(gender)) {
+      throw new ApiError(400, "Invalid gender value");
+    }
+    updates.gender = gender;
+  }
+  if (city !== undefined) updates.city = city;
 
   if (Object.keys(updates).length === 0) {
     throw new ApiError(400, "No valid fields to update");
@@ -616,10 +638,23 @@ exports.deleteAccount = async (req, res) => {
   const userDocuments = await Document.find({ userId }).select("_id");
   const docIds = userDocuments.map((d) => d._id);
 
+  // Find all user chat sessions to cascade-delete messages
+  const userChatSessions = await ChatSession.find({ userId }).select("_id");
+  const chatSessionIds = userChatSessions.map((s) => s._id);
+
+  // Find all user document chat sessions to cascade-delete messages
+  const userDocChatSessions = await DocumentChatSession.find({ userId }).select("_id");
+  const docChatSessionIds = userDocChatSessions.map((s) => s._id);
+
   // Cascade delete related data
   await Promise.all([
     docIds.length > 0 ? Clause.deleteMany({ documentId: { $in: docIds } }) : Promise.resolve(),
+    docIds.length > 0 ? DocumentTreeNode.deleteMany({ documentId: { $in: docIds } }) : Promise.resolve(),
+    docIds.length > 0 ? DocumentChatMessage.deleteMany({ documentId: { $in: docIds } }) : Promise.resolve(),
+    docIds.length > 0 ? DocumentChatSession.deleteMany({ documentId: { $in: docIds } }) : Promise.resolve(),
     ChatMessage.deleteMany({ userId }),
+    chatSessionIds.length > 0 ? ChatBotMessage.deleteMany({ sessionId: { $in: chatSessionIds } }) : Promise.resolve(),
+    ChatSession.deleteMany({ userId }),
     Document.deleteMany({ userId }),
     ScanResult.deleteMany({ userId }),
   ]);

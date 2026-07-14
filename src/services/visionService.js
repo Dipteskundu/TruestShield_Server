@@ -1,17 +1,6 @@
 const axios = require("axios");
 const { uploadBuffer } = require("./cloudinaryService");
-
-function getMockResponse() {
-  return {
-    verdict: "suspicious",
-    confidence: 65,
-    reasons: [
-      "Image analysis unavailable — Cloudinary not configured",
-      "Consider verifying the source before trusting this image",
-    ],
-    metadata: { mode: "mock" },
-  };
-}
+const ApiError = require("../utils/apiError");
 
 function parseSightengineResponse(data) {
   const aiProb = data?.ai_generated?.prob ?? 0;
@@ -66,20 +55,20 @@ function computeConfidence(verdict, score) {
 
 async function analyzeImage(buffer, mimetype) {
   if (!buffer) {
-    return getMockResponse();
+    throw new ApiError(400, "No image provided");
   }
 
   const cloudinaryResult = await uploadBuffer(buffer, "trustshield/scans", "image");
 
   if (cloudinaryResult.mode === "mock") {
-    return getMockResponse();
+    throw new ApiError(503, "Image upload service unavailable. Please try again later.");
   }
 
   const user = process.env.SIGHTENGINE_API_USER;
   const secret = process.env.SIGHTENGINE_API_SECRET;
 
   if (!user || !secret) {
-    return getMockResponse();
+    throw new ApiError(503, "Image analysis service not configured. Please contact support.");
   }
 
   try {

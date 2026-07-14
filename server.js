@@ -4,8 +4,8 @@ const connectDB = require("./src/config/db");
 
 const PORT = process.env.PORT || 5000;
 
-process.on("unhandledRejection", (reason, promise) => {
-  console.error("Unhandled Rejection at:", promise, "reason:", reason);
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled Rejection:", reason);
 });
 
 process.on("uncaughtException", (error) => {
@@ -16,8 +16,15 @@ process.on("uncaughtException", (error) => {
 async function start() {
   await connectDB();
 
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`TrustShield API running on http://localhost:${PORT}`);
+  });
+
+  process.on("SIGTERM", () => {
+    console.log("SIGTERM received. Shutting down gracefully...");
+    server.close(() => {
+      process.exit(0);
+    });
   });
 }
 

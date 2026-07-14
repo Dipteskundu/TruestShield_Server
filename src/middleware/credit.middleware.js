@@ -62,26 +62,47 @@ function creditMiddleware(module) {
 
       // Registered free: weekly credits shared across modules
       const currentMonday = getCurrentWeekMonday();
-      let weeklyCredits = user?.weeklyCredits || 0;
-      const weekStart = user?.weekStart;
 
-      if (!weekStart || weekStart < currentMonday) {
-        weeklyCredits = 0;
-        await User.findByIdAndUpdate(userId, {
-          weeklyCredits: 0,
-          weekStart: currentMonday,
-        });
+      // Atomic check-and-increment to prevent race conditions
+      const updatedUser = await User.findOneAndUpdate(
+        {
+          _id: userId,
+          $or: [
+            { weekStart: { $lt: currentMonday } },
+            { weekStart: null },
+          ],
+        },
+        {
+          $set: { weeklyCredits: 1, weekStart: currentMonday },
+        },
+        { new: true }
+      );
+
+      if (updatedUser) {
+        // Week was reset, user gets 1 credit
+        req.creditCount = 1;
+        return next();
       }
 
-      if (weeklyCredits >= WEEKLY_LIMIT) {
+      // Week hasn't reset, try to increment if under limit
+      const userAfterReset = await User.findOneAndUpdate(
+        {
+          _id: userId,
+          weeklyCredits: { $lt: WEEKLY_LIMIT },
+        },
+        {
+          $inc: { weeklyCredits: 1 },
+        },
+        { new: true }
+      );
+
+      if (!userAfterReset) {
         return next(
           new ApiError(429, "Weekly credit limit reached. Upgrade to Pro for unlimited scans.")
         );
       }
 
-      await User.findByIdAndUpdate(userId, { $inc: { weeklyCredits: 1 } });
-
-      req.creditCount = weeklyCredits + 1;
+      req.creditCount = userAfterReset.weeklyCredits;
       next();
     } catch (error) {
       next(error);
@@ -107,26 +128,47 @@ function documentCreditMiddleware() {
       }
 
       const currentMonthStart = getCurrentMonthStart();
-      let documentCredits = user?.documentCredits || 0;
-      const monthStart = user?.documentMonthStart;
 
-      if (!monthStart || monthStart < currentMonthStart) {
-        documentCredits = 0;
-        await User.findByIdAndUpdate(userId, {
-          documentCredits: 0,
-          documentMonthStart: currentMonthStart,
-        });
+      // Atomic check-and-increment to prevent race conditions
+      const updatedUser = await User.findOneAndUpdate(
+        {
+          _id: userId,
+          $or: [
+            { documentMonthStart: { $lt: currentMonthStart } },
+            { documentMonthStart: null },
+          ],
+        },
+        {
+          $set: { documentCredits: 1, documentMonthStart: currentMonthStart },
+        },
+        { new: true }
+      );
+
+      if (updatedUser) {
+        // Month was reset, user gets 1 credit
+        req.creditCount = 1;
+        return next();
       }
 
-      if (documentCredits >= DOCUMENT_MONTHLY_LIMIT) {
+      // Month hasn't reset, try to increment if under limit
+      const userAfterReset = await User.findOneAndUpdate(
+        {
+          _id: userId,
+          documentCredits: { $lt: DOCUMENT_MONTHLY_LIMIT },
+        },
+        {
+          $inc: { documentCredits: 1 },
+        },
+        { new: true }
+      );
+
+      if (!userAfterReset) {
         return next(
           new ApiError(429, "Monthly document limit reached (5/month on free plan). Upgrade to Pro for unlimited.")
         );
       }
 
-      await User.findByIdAndUpdate(userId, { $inc: { documentCredits: 1 } });
-
-      req.creditCount = documentCredits + 1;
+      req.creditCount = userAfterReset.documentCredits;
       next();
     } catch (error) {
       next(error);

@@ -8,7 +8,14 @@ function hashInput(input) {
 async function getCache(key) {
   if (!isConfigured) return null;
   const value = await redisCommand(["GET", key]);
-  return value ? JSON.parse(value) : null;
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    // Corrupted cache entry - delete it and return null
+    await deleteCache(key).catch(() => {});
+    return null;
+  }
 }
 
 async function setCache(key, value, ttlSeconds = 86400) {
