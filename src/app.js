@@ -1,4 +1,5 @@
 const express = require("express");
+const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const cookieParser = require("cookie-parser");
@@ -15,6 +16,9 @@ const adminChatbotRoutes = require("./routes/adminChatbot.routes");
 
 const app = express();
 
+// CORS — allow all origins so no frontend is blocked
+app.use(cors({ origin: true, credentials: true }));
+
 app.use(helmet({
   crossOriginResourcePolicy: false,
   crossOriginEmbedderPolicy: false,
@@ -23,6 +27,11 @@ app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+
+// Root route — prevents 404 noise in logs for GET / and GET /favicon.ico
+app.get("/", (_req, res) => {
+  res.json({ status: "ok", service: "trustshield-api", version: "1.0.0" });
+});
 
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", service: "trustshield-api" });
