@@ -9,7 +9,12 @@ async function connectDB() {
 
   mongoose.set("strictQuery", true);
 
-  const conn = await mongoose.connect(uri);
+  const conn = await mongoose.connect(uri, {
+    maxPoolSize: 10,
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 45000,
+    retryWrites: true,
+  });
   console.log(`MongoDB connected: ${conn.connection.host}`);
 }
 

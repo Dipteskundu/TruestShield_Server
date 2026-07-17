@@ -16,12 +16,18 @@ const adminChatbotRoutes = require("./routes/adminChatbot.routes");
 
 const app = express();
 
-// CORS — allow all origins so no frontend is blocked
-app.use(cors({ origin: true, credentials: true }));
+// CORS — in production restrict to FRONTEND_URL; in development allow all
+app.use(cors({
+  origin: process.env.NODE_ENV === "production"
+    ? process.env.FRONTEND_URL || true
+    : true,
+  credentials: true,
+}));
 
 app.use(helmet({
   crossOriginResourcePolicy: false,
   crossOriginEmbedderPolicy: false,
+  crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
 }));
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 app.use(express.json({ limit: "10mb" }));

@@ -10,6 +10,7 @@ const router = express.Router();
 
 router.post(
   "/text",
+  optionalAuth,
   creditMiddleware("text"),
   validate(scanTextSchema),
   asyncHandler(scanController.scanText)
@@ -17,6 +18,7 @@ router.post(
 
 router.post(
   "/url",
+  optionalAuth,
   creditMiddleware("url"),
   validate(scanUrlSchema),
   asyncHandler(scanController.scanUrl)
@@ -24,6 +26,7 @@ router.post(
 
 router.post(
   "/image",
+  optionalAuth,
   creditMiddleware("image"),
   uploadImage,
   asyncHandler(scanController.scanImage)

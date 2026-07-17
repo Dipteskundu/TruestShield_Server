@@ -52,7 +52,7 @@ exports.getRateLimits = async (_req, res) => {
 };
 
 exports.updateRateLimits = async (req, res) => {
-  const { free, pro } = req.body;
+  const { free, pro } = req.validated?.body || req.body;
 
   const config = await SystemConfig.findByIdAndUpdate(
     "global",

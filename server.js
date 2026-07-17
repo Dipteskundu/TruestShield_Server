@@ -26,6 +26,13 @@ async function start() {
       process.exit(0);
     });
   });
+
+  process.on("SIGINT", () => {
+    console.log("SIGINT received. Shutting down gracefully...");
+    server.close(() => {
+      process.exit(0);
+    });
+  });
 }
 
 start().catch((err) => {

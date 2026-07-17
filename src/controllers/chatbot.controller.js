@@ -5,12 +5,12 @@ const { buildSystemPrompt } = require("../services/chatPromptService");
 const { streamChatCompletion } = require("../services/chatbotAiService");
 
 exports.sendMessage = async (req, res) => {
-  const { message, sessionId } = req.body;
+  const { message, sessionId } = req.validated?.body || req.body;
   const userId = req.user?.id ?? null;
 
   let session;
   if (sessionId) {
-    session = await ChatSession.findById(sessionId);
+    session = await ChatSession.findOne({ _id: sessionId, userId });
     if (!session) {
       session = await ChatSession.create({
         userId,

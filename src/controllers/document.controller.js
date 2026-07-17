@@ -283,7 +283,7 @@ exports.getDocumentTree = async (req, res) => {
 
 exports.sendDocumentChatMessage = async (req, res) => {
   const { id } = req.params;
-  const { message, sessionId } = req.body;
+  const { message, sessionId } = req.validated?.body || req.body;
   const userId = req.user.id;
 
   const document = await Document.findOne({ _id: id, userId });
